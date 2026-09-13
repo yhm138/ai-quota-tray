@@ -10,7 +10,7 @@
   <a href="../../actions/workflows/build.yml"><img alt="build" src="../../actions/workflows/build.yml/badge.svg"></a>
   <a href="../../actions/workflows/test.yml"><img alt="tests" src="../../actions/workflows/test.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
-  <a href="../../releases/latest"><img alt="release" src="https://img.shields.io/github/v/release/yhm138/ai-quota-tray?include_prereleases"></a>
+  <a href="../../releases/latest"><img alt="release" src="https://img.shields.io/github/v/release/OWNER/QuotaTray?include_prereleases"></a>
 </p>
 
 <p align="center">
@@ -65,7 +65,7 @@ Get-FileHash .\QuotaTray.exe -Algorithm SHA256
 ### Option 2 — from source
 
 ```powershell
-git clone https://github.com/yhm138/ai-quota-tray.git
+git clone https://github.com/OWNER/QuotaTray.git
 cd QuotaTray
 .\install.bat
 ```
@@ -89,6 +89,10 @@ winget install Python.Python.3.12
 | `preview.bat` | Draw the panel with fake data to check the UI renders |
 | `claude_login.bat` | Start Claude Code with the proxy port forced to a known-good value |
 | `build_exe.bat` | Build `dist\QuotaTray.exe` locally |
+| `publish.bat` | Create the GitHub repository and push (one-time) |
+| `release.bat` | Tag a version, which builds and publishes a release |
+| `fix_push.bat` | Retry a failed push with the full error shown |
+| `find_gh.bat` | Locate git/gh when a stale PATH hides them |
 | `uninstall.bat` | Remove run-at-login, stop the process, optionally delete config |
 
 ## Where the numbers come from
@@ -218,15 +222,23 @@ HTTP 401 degradation, both percent conventions (0–1 and 0–100), loose window
 matching, cross-source merging, the IDE-not-running path, cache round-trips and
 countdown formatting.
 
-Releases are cut by tagging:
+Releases are cut by tagging. Use `release.bat`, which checks that the workflow
+is actually committed first (tagging a commit without it builds nothing),
+commits anything pending, pushes the tag and then watches the run:
+
+```powershell
+.\release.bat
+```
+
+Or by hand:
 
 ```powershell
 git tag v1.0.1
 git push origin v1.0.1
 ```
 
-which runs the [build workflow](.github/workflows/build.yml) and attaches the
-executable, the portable zip and the SHA256 sums.
+Either way the [build workflow](.github/workflows/build.yml) attaches the
+executable, the portable zip and the SHA256 sums to the release.
 
 ## Known limitations
 
@@ -277,7 +289,7 @@ Get-FileHash .\QuotaTray.exe -Algorithm SHA256
 ### 方式二：从源码运行
 
 ```powershell
-git clone https://github.com/yhm138/ai-quota-tray.git
+git clone https://github.com/OWNER/QuotaTray.git
 cd QuotaTray
 .\install.bat
 ```
@@ -299,6 +311,10 @@ winget install Python.Python.3.12
 | `preview.bat` | 用假数据画一次面板，确认界面正常 |
 | `claude_login.bat` | 用指定的代理端口启动 Claude Code，方便登录 |
 | `build_exe.bat` | 本地打包出 `dist\QuotaTray.exe` |
+| `publish.bat` | 建 GitHub 仓库并推送（只需一次） |
+| `release.bat` | 打版本 tag，自动构建并发布 Release |
+| `fix_push.bat` | push 失败时重试，并显示完整错误 |
+| `find_gh.bat` | PATH 没刷新导致找不到 git/gh 时定位它们 |
 | `uninstall.bat` | 移除开机自启、结束进程、可选删除配置 |
 
 ## 额度是从哪里读的
@@ -381,14 +397,20 @@ python tests\test_providers.py    # 37 项离线测试，不需要联网
 
 测试用伪造的响应跑通全部三条兜底链，覆盖 HTTP 401 降级、两种百分比口径（0–1 和 0–100）、窗口键名模糊匹配、跨来源合并、IDE 未运行、缓存往返和倒计时格式。
 
-发布新版本靠打 tag：
+发布新版本靠打 tag。用 `release.bat` 更稳，它会先确认 workflow 确实在提交里（打了 tag 但仓库里没有 workflow 是不会有任何构建的），提交未保存的改动，推送 tag，然后盯着构建跑完：
+
+```powershell
+.\release.bat
+```
+
+或者手动：
 
 ```powershell
 git tag v1.0.1
 git push origin v1.0.1
 ```
 
-会触发 [构建工作流](.github/workflows/build.yml)，自动把 exe、便携版 zip 和 SHA256 附到 Release 上。
+两种方式都会触发 [构建工作流](.github/workflows/build.yml)，自动把 exe、便携版 zip 和 SHA256 附到 Release 上。
 
 ## 已知限制
 

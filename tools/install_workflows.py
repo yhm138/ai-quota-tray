@@ -63,6 +63,8 @@ jobs:
           run.pyw
 
       - name: Smoke-test both builds
+        env:
+          QUOTATRAY_NO_OPEN: "1"
         # --diagnose exits 0 even with nothing configured, so a non-zero exit
         # means the bundle itself is broken (a missing hidden import, say).
         # These are windowed (--noconsole) binaries, so PowerShell will not wait
@@ -154,7 +156,6 @@ jobs:
           done
           exit $bad
 """
-
 
 FILES = {
     "build.yml": BUILD_YML,

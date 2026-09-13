@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import queue
 import sys
 import threading
@@ -322,7 +323,10 @@ def _emit(lines: list[str]) -> None:
         path.write_text(text, encoding="utf-8")
     except OSError:
         return
-    autostart.open_folder(path)
+    # QUOTATRAY_NO_OPEN lets the CI smoke test run the windowed build without
+    # spawning Notepad on the runner.
+    if not os.environ.get("QUOTATRAY_NO_OPEN"):
+        autostart.open_folder(path)
 
 
 def run_console(diagnose: bool = False) -> int:

@@ -129,6 +129,9 @@ if defined GH (
         pause
         exit /b 1
     )
+    REM gh auth login does not always configure git's credential helper, and
+    REM without it an HTTPS push is rejected even though gh itself is signed in.
+    "!GH!" auth setup-git >nul 2>nul
     for /f "usebackq delims=" %%i in (`"!GH!" api user --jq .login 2^>nul`) do set "OWNER=%%i"
     if not defined OWNER (
         echo   [X] Could not read your GitHub username. Try:  gh auth login
@@ -225,7 +228,10 @@ echo   [5/6] Creating the repository and pushing ...
 "!GIT!" remote get-url origin >nul 2>nul
 if errorlevel 1 (
     if defined GH (
-        "!GH!" repo create "!OWNER!/!REPO!" --public --source=. --remote=origin --push --description "Windows 11 tray app showing Claude, Codex and Antigravity IDE quota usage"
+        REM Deliberately NOT using --push: gh exits 0 once the repository is
+        REM created even when its internal push fails, which silently leaves an
+        REM empty repository behind. Pushing separately surfaces the real error.
+        "!GH!" repo create "!OWNER!/!REPO!" --public --source=. --remote=origin --description "Windows 11 tray app showing Claude, Codex and Antigravity IDE quota usage"
         if errorlevel 1 (
             echo   [X] gh repo create failed. If the name is taken, rerun with a different one.
             pause
@@ -233,16 +239,31 @@ if errorlevel 1 (
         )
     ) else (
         "!GIT!" remote add origin "!MANUAL_URL!"
-        "!GIT!" push -u origin main
-        if errorlevel 1 (
-            echo   [X] push failed. Check the URL, and that the repository is empty.
-            pause
-            exit /b 1
-        )
     )
 ) else (
-    echo         origin already exists, pushing instead
-    "!GIT!" push -u origin main
+    echo         origin already exists
+)
+
+echo.
+echo         pushing main ...
+"!GIT!" push -u origin main
+if errorlevel 1 (
+    echo.
+    echo   [X] push failed. The repository may exist but be empty.
+    echo       Run  fix_push.bat  - it configures the credential helper and
+    echo       retries with the full error shown.
+    echo.
+    pause
+    exit /b 1
+)
+
+echo.
+echo         verifying the remote has the commit ...
+"!GIT!" ls-remote --heads origin main
+if errorlevel 1 (
+    echo   [X] Could not read the remote back. Run fix_push.bat.
+    pause
+    exit /b 1
 )
 
 REM ---------------------------------------------------------------- release
