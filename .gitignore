@@ -1,0 +1,28 @@
+# virtualenv
+.venv/
+venv/
+env/
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# pyinstaller
+build/
+dist/
+*.spec
+
+# generated at build time by tools/make_icon.py
+assets/
+
+# local diagnostic output - may contain machine paths and account names
+_probe.txt
+diagnostics.txt
+
+# editors / os
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini

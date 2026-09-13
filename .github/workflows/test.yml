@@ -1,0 +1,44 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # pystray is a Windows-runtime dependency; the test suite does not import it.
+      - name: Install test dependencies
+        run: python -m pip install --quiet Pillow requests cryptography
+
+      - name: Run the offline test suite
+        run: python tests/test_providers.py
+
+      - name: Byte-compile every module
+        run: python -m compileall -q quota_tray tools run.pyw
+
+      - name: Check the shipped code stays pure ASCII
+        # Non-ASCII in .bat files shows up as mojibake in cmd.exe, so the source
+        # and scripts are kept ASCII-only. Docs are exempt (README is bilingual).
+        run: |
+          set -e
+          bad=0
+          for f in $(git ls-files '*.py' '*.pyw' '*.bat' '*.yml'); do
+            if LC_ALL=C grep -qP '[^\x00-\x7F]' "$f"; then
+              echo "non-ASCII bytes in $f"
+              bad=1
+            fi
+          done
+          exit $bad
