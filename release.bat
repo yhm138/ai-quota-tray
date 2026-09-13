@@ -143,9 +143,19 @@ REM ---------------------------------------------------------------- version
 set "VER=v1.0.0"
 set /p "VER=Version tag [v1.0.0]: "
 if "!VER!"=="" set "VER=v1.0.0"
-echo !VER! | findstr /r "^v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*$" >nul
-if errorlevel 1 (
-    echo   [X] "!VER!" is not of the form vMAJOR.MINOR.PATCH, for example v1.0.0
+REM Drop stray spaces a paste can bring along.
+set "VER=!VER: =!"
+
+REM Validate in pure batch: no findstr, no pipe. Piping "echo X " into findstr
+REM sends the space before the pipe too, so an end-anchored pattern never
+REM matches - which is exactly how a perfectly good v1.0.0 got rejected.
+set "V1=!VER:~0,1!"
+set "V2=!VER:~1,1!"
+set "VEROK="
+if /i "!V1!"=="v" for %%D in (0 1 2 3 4 5 6 7 8 9) do if "!V2!"=="%%D" set "VEROK=1"
+if not defined VEROK (
+    echo   [X] "!VER!" does not look like a version tag.
+    echo       Expected a leading v then a digit, for example v1.0.0
     pause
     exit /b 1
 )
