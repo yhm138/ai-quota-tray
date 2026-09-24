@@ -320,6 +320,29 @@ jar = cc.read_cookies(db, "%claude.ai", key)
 check("sessionKey read and hash stripped", jar.get("sessionKey") == "sk-ant-1", jar)
 check("plain cookies read too", jar.get("lastActiveOrg") == "org-9", jar)
 
+# ------------------------------------------------------------------ updater
+
+print("\n--- updater ---")
+from quota_tray import __version__, updater                      # noqa: E402
+from quota_tray.providers import base as providers_base          # noqa: E402
+
+check("version parse", updater.parse_version("v1.2") == (1, 2, 0))
+check("newer tag detected", updater.is_newer("v1.10.0", "1.9.3"))
+check("same tag is not newer", not updater.is_newer(f"v{__version__}"))
+check("junk tag ignored", not updater.is_newer("nightly"))
+
+real_session = providers_base.session
+providers_base.session = lambda: fake_session(
+    get=lambda url, **k: FakeResp({"tag_name": "v99.0.0", "html_url": "https://x/rel"}))
+found = updater.check("o/r")
+check("check finds a newer release", found is not None and found.tag == "v99.0.0", found)
+providers_base.session = lambda: fake_session(
+    get=lambda url, **k: FakeResp({"tag_name": f"v{__version__}"}))
+check("check is quiet when current", updater.check("o/r") is None)
+providers_base.session = lambda: fake_session(get=lambda url, **k: FakeResp({}, 404))
+check("check tolerates no releases", updater.check("o/r") is None)
+providers_base.session = real_session
+
 # ------------------------------------------------------------------ misc
 
 print("\n--- misc ---")

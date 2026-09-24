@@ -50,6 +50,8 @@ DEFAULTS: dict[str, Any] = {
     "warn_percent": 75,                  # amber threshold
     "danger_percent": 90,                # red threshold
     "icon_style": "bars",                # bars | ring
+    "check_updates": True,               # look for a new release once a day
+    "update_repo": "yhm138/ai-quota-tray",
     "providers": {
         "claude": {
             "enabled": True,

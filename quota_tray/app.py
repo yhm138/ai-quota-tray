@@ -9,7 +9,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
-from . import APP_NAME, __version__
+from . import APP_NAME, __version__, updater
 from .config import (
     CONFIG_PATH,
     Config,
@@ -51,6 +51,8 @@ class QuotaTrayApp:
         self.results: list[ProviderResult] = self._load_cached()
         self.last_refresh: datetime | None = None
         self.refreshing = False
+        self.update: updater.Release | None = None
+        self._notified_tag: str | None = None
         self._stop = threading.Event()
         self._wake = threading.Event()
         self._ui_queue: "queue.Queue" = queue.Queue()
@@ -123,6 +125,12 @@ class QuotaTrayApp:
             pystray.MenuItem("Refresh now", lambda *_a: self.request_refresh()),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(
+                lambda _i: f"Update to {self.update.tag} and restart" if self.update else "Update",
+                self._on_apply_update,
+                visible=lambda _i: self.update is not None,
+            ),
+            pystray.MenuItem("Check for updates", self._on_check_update),
+            pystray.MenuItem(
                 "Run at login",
                 self._on_toggle_autostart,
                 checked=lambda _i: autostart.is_enabled(),
@@ -181,6 +189,65 @@ class QuotaTrayApp:
         except Exception:                                       # noqa: BLE001
             pass
 
+    # ------------------------------------------------------------ updates
+
+    def _update_repo(self) -> str:
+        return str(self.config.get("update_repo") or updater.DEFAULT_REPO)
+
+    def _check_update(self, *, manual: bool) -> None:
+        latest = updater.latest_release(self._update_repo())
+        found = latest if latest and updater.is_newer(latest.tag) else None
+        if found:
+            self.update = found
+        try:
+            self.icon.update_menu()
+        except Exception:                                       # noqa: BLE001
+            pass
+        self._post(self._push_to_panel)
+        if found and (manual or self._notified_tag != found.tag):
+            self._notified_tag = found.tag
+            self._notify(f"{APP_NAME} {found.tag} is available. "
+                         "Right-click the tray icon and choose \"Update\".")
+        elif manual and latest is None:
+            self._notify("Could not reach GitHub to check for updates. See the log file.")
+        elif manual:
+            self._notify(f"{APP_NAME} v{__version__} is the latest version.")
+
+    def _notify(self, text: str) -> None:
+        try:
+            self.icon.notify(text, APP_NAME)
+        except Exception:                                       # noqa: BLE001
+            log.debug("tray notification failed", exc_info=True)
+
+    def _update_loop(self) -> None:
+        # Give the first quota refresh a head start, then check once a day.
+        if self._stop.wait(90):
+            return
+        while not self._stop.is_set():
+            if self.config.get("check_updates", True):
+                try:
+                    self._check_update(manual=False)
+                except Exception:                               # noqa: BLE001
+                    log.exception("update check failed")
+            if self._stop.wait(24 * 3600):
+                return
+
+    def _on_check_update(self, *_args) -> None:
+        threading.Thread(
+            target=lambda: self._check_update(manual=True), name="update-check", daemon=True
+        ).start()
+
+    def _on_apply_update(self, *_args) -> None:
+        if not self.update:
+            return
+        try:
+            updater.launch(self.update, self._update_repo())
+        except Exception as exc:                                # noqa: BLE001
+            log.exception("could not start the updater")
+            self._notify(f"Update failed to start: {exc}")
+            return
+        self.quit()
+
     # ------------------------------------------------------------ refresh
 
     def request_refresh(self) -> None:
@@ -225,7 +292,8 @@ class QuotaTrayApp:
             "warn": self.config.get("warn_percent", 75),
             "danger": self.config.get("danger_percent", 90),
             "subtitle": f"updated {humanize_age(self.last_refresh)}" if self.last_refresh else "",
-            "footer": f"v{__version__} - every {self.config.refresh_seconds // 60} min",
+            "footer": f"v{__version__} - every {self.config.refresh_seconds // 60} min"
+            + (f" - {self.update.tag} available (tray menu > Update)" if self.update else ""),
         }
 
     # ------------------------------------------------------------ diagnostics
@@ -273,6 +341,7 @@ class QuotaTrayApp:
         self.root.after(120, self._pump)
         threading.Thread(target=self._refresh_loop, name="refresh", daemon=True).start()
         threading.Thread(target=self.icon.run, name="tray", daemon=True).start()
+        threading.Thread(target=self._update_loop, name="update", daemon=True).start()
         self.root.after(200, self._push_to_panel)
         self.root.mainloop()
 
@@ -402,8 +471,27 @@ def run_panel_demo() -> int:
     return 0
 
 
+def run_update() -> int:
+    """`--update`: install the latest release over this copy, then restart it."""
+    setup_logging(verbose=True)
+    repo = str(Config.load().get("update_repo") or updater.DEFAULT_REPO)
+    rel = updater.check(repo)
+    if not rel:
+        _emit([f"{APP_NAME} v{__version__} is already the latest version."])
+        return 0
+    try:
+        updater.launch(rel, repo)
+    except Exception as exc:                                    # noqa: BLE001
+        _emit([f"Could not start the update: {exc}"])
+        return 1
+    _emit([f"Updating {APP_NAME} to {rel.tag}; it restarts by itself when done."])
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    if "--update" in argv:
+        return run_update()
     if "--once" in argv or "--diagnose" in argv:
         return run_console(diagnose="--diagnose" in argv)
     if "--panel-demo" in argv:
