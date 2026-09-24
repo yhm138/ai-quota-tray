@@ -24,12 +24,21 @@
 ## What it does
 
 It sits in the notification area, starts with Windows, and draws one usage bar
-per product. Click it and you get every quota window, how much is used, and how
-long until each resets.
+per product. Click it and the panel (screenshot above) shows, per product:
+
+- **Every quota window** with how much is used and how long until it resets:
+  Claude's 5-hour and 7-day windows plus any extra limits the account has,
+  Codex's windows, and Antigravity's prompt credits and per-model quotas.
+- **Account details**: plan and status (a cancelled Claude plan shows amber),
+  when the subscription started or renews, Claude extra usage, Codex credits.
+- **Banked limit resets**: the one-time resets Anthropic and OpenAI hand out,
+  how many are unused and when the first one expires. A notification reminds
+  you once a day while any are unused.
 
 No sign-in. It reads credentials that already exist on your machine from
-whichever tool put them there, and every product has **several fallback paths**
-so it keeps working when one of them is unavailable.
+whichever tool put them there (including Claude Desktop's own login), and
+every product has **several fallback paths** so it keeps working when one of
+them is unavailable. New versions install from the tray menu in one click.
 
 ## Install
 
@@ -180,6 +189,9 @@ machine. **The IDE has to be open**, otherwise the panel says "IDE not running".
   "warn_percent": 75,              // amber threshold
   "danger_percent": 90,            // red threshold
   "icon_style": "bars",            // "bars" or "ring"
+  "check_updates": true,           // look for a new release once a day
+  "remind_unused_resets": true,    // daily notification about banked resets
+  "reset_reminder_hour": 10,       // ...from this local hour on
   "providers": {
     "claude": {
       "enabled": true,
@@ -188,7 +200,7 @@ machine. **The IDE has to be open**, otherwise the panel says "IDE not running".
       "session_key": "",
       "credentials_path": "",
       "scan_wsl": true,
-      "order": ["oauth", "desktop_cookie", "manual_cookie"]
+      "order": ["oauth", "desktop_oauth", "desktop_cookie", "manual_cookie"]
     },
     "codex": {
       "enabled": true,
@@ -217,16 +229,21 @@ Run **`diagnose.bat`** first. It prints the outcome of every source:
 ```
 === Claude [max] ===
   status: connected
-  source: Claude Code OAuth (.credentials.json)
-  5-hour window         31%   resets in 2h 1m
-  7-day window          12%   resets in 6d 12h
-    [OK] OAuth credentials: C:\Users\you\.claude\.credentials.json
+  source: Claude Desktop login
+  5-hour window          5%   resets in 2h 59m
+  7-day window          45%   resets in 2d 15h
+    [FAIL] OAuth credentials: ...\.credentials.json: token expired
+    [OK] Claude Desktop login: ...\Claude\config.json [oauth:tokenCacheV2]
 ```
+
+In the panel, *Diagnostics* starts with a plain **SUMMARY** of what is broken,
+and *Open as text* opens the whole report in Notepad.
 
 | Symptom | Fix |
 |---|---|
-| Every Claude source FAILs | Run `claude` once so it refreshes the token |
-| `token expired` | Same — using Claude Code renews it automatically |
+| Every Claude source FAILs | Open Claude Desktop and make sure you are signed in; or run `claude` once |
+| `token expired` (OAuth credentials) | Harmless when *Claude Desktop login* works; Claude Code renews its own token when you use it |
+| `Claude Desktop login: the saved login has expired` | Open Claude Desktop; it renews its login by itself |
 | `App-Bound encryption (v20)` | Newer Electron cookies can't be decrypted; use Claude Code credentials or paste a `session_key` into config |
 | `could not copy the cookie DB` | Claude Desktop locked the file; quit it from its tray icon once, then *Refresh now* |
 | `blocked by Cloudflare` | `claude.ai` challenged the request; open Claude Desktop so the session is fresh, or rely on Claude Code OAuth |
@@ -234,7 +251,8 @@ Run **`diagnose.bat`** first. It prints the outcome of every source:
 | Codex "partly from an offline snapshot" | The live endpoint reported only one window; the other came from the log. Normal |
 | Antigravity "IDE not running" | Open the IDE, then *Refresh now* in the tray menu |
 | Claude Code can't reach your proxy | Edit `PROXY_PORT` at the top of `claude_login.bat`, run it, then `/login` |
-| No tray icon | Look under the taskbar `^` arrow; check `%APPDATA%\QuotaTray\quota-tray.log` |
+| No tray icon | Start `QuotaTray.exe` by hand: it opens its panel. Windows 11 hides new tray icons under the `^` arrow; drag it out. If it cannot start you get a message and `%APPDATA%\QuotaTray\crash.log` |
+| No plan / resets lines | They come from the account APIs; check the log. Codex needs the ChatGPT usage API source to work |
 | Panel missing / tkinter error | Python was installed without tcl/tk — reinstall it |
 | A percentage looks wrong | Set that provider's `percent_scale` from `auto` to `percent` |
 
@@ -242,35 +260,30 @@ Log: `%APPDATA%\QuotaTray\quota-tray.log` · Snapshot: `%APPDATA%\QuotaTray\diag
 
 ## Privacy
 
-- Credentials are used only in HTTP `Authorization` / `Cookie` headers. Never logged, never written to disk, never sent anywhere else.
-- The only hosts contacted are `api.anthropic.com`, `claude.ai`, `chatgpt.com` and `127.0.0.1`.
-- Every network call lives in the three files under `quota_tray/providers/`, so the whole surface is short enough to read.
+- Credentials are used only in HTTP `Authorization` / `Cookie` headers, never logged and never sent anywhere else. Tokens are only read, never refreshed, so your Claude Code / Claude Desktop logins stay untouched.
+- One thing is written to disk: the last working Claude Desktop session cookie, DPAPI-encrypted to your Windows account, in `%APPDATA%\QuotaTray\claude-session.bin` (used when Claude Desktop keeps its cookie file locked). Delete it any time.
+- Hosts contacted: `api.anthropic.com`, `claude.ai`, `chatgpt.com` and `127.0.0.1` for quotas; `api.github.com`, `github.com` and `raw.githubusercontent.com` for the daily update check (turn off with `check_updates`).
+- Every quota call lives in the files under `quota_tray/providers/`, the update check in `quota_tray/updater.py`, so the whole surface is short enough to read.
 - `probe.bat` redacts tokens and cookies before writing its report, but `_probe.txt` still contains local paths — do not paste it publicly without a look.
 
 ## Development
 
 ```powershell
-python tests\test_providers.py    # 37 offline checks, no network needed
+python tests\test_providers.py    # 85 offline checks, no network needed
 ```
 
 The suite drives all three fallback chains with fabricated payloads, covering
-HTTP 401 degradation, both percent conventions (0–1 and 0–100), loose window-key
-matching, cross-source merging, the IDE-not-running path, cache round-trips and
+HTTP 401 degradation, the percent conventions, Claude Desktop's encrypted login
+cache, the Electron cookie store, plan / credits / reset parsing, the reset
+reminder, cross-source merging, the IDE-not-running path, cache round-trips and
 countdown formatting.
 
-Releases are cut by tagging. Use `release.bat`, which checks that the workflow
-is actually committed first (tagging a commit without it builds nothing),
-commits anything pending, pushes the tag and then watches the run:
+To cut a release, bump `__version__` in `quota_tray/__init__.py`, then either
+open **Actions → build → Run workflow** and enter the matching version (for
+example `v1.2.1`), which creates the tag and the release, or push a tag:
 
 ```powershell
-.\release.bat
-```
-
-Or by hand:
-
-```powershell
-git tag v1.0.1
-git push origin v1.0.1
+.\release.bat                     # or: git tag v1.2.1 && git push origin v1.2.1
 ```
 
 Either way the [build workflow](.github/workflows/build.yml) attaches the
@@ -280,6 +293,7 @@ executable, the portable zip and the SHA256 sums to the release.
 
 - These are **undocumented internal endpoints**. Vendors can change them at any time. The parsers hunt recursively for `utilization` / `used_percent` fields rather than fixed paths, so a reshuffled envelope still parses — and if one truly breaks, `diagnose.bat` names it.
 - Antigravity needs the IDE running.
+- Claude publishes no renewal date, so only the subscription start is shown. New Claude limits appear under the names the server gives them (internal code names such as "Iguana Necktie") until QuotaTray learns a friendlier label.
 - The Codex session-log fallback is a snapshot, not live data.
 - The release binaries are unsigned. See the antivirus note above.
 
@@ -295,9 +309,13 @@ MIT — see [LICENSE](LICENSE).
 
 ## 这是什么
 
-一个常驻 Windows 11 通知区域、开机自启的小程序，把每个产品的用量画成一条进度条。点开面板能看到每个额度窗口用了多少、还有多久重置。
+一个常驻 Windows 11 通知区域、开机自启的小程序，把每个产品的用量画成一条进度条。点开面板（见上方截图），每个产品会显示：
 
-**不需要登录**。它读取你机器上各个工具已经写好的凭据，而且每个产品都有**多条兜底路径**，某一条不通时自动换下一条。
+- **所有额度窗口**：用了多少、还有多久重置。Claude 的 5 小时和 7 天窗口以及账号上的其他限额，Codex 的窗口，Antigravity 的 prompt 积分和各模型额度。
+- **账号信息**：套餐与状态（Claude 套餐已取消会显示为黄色）、订阅开始或续费日期、Claude 额外用量、Codex 积分。
+- **可用的额度重置**：Anthropic 和 OpenAI 发放的一次性重置，还剩几次、最早哪天过期。只要还有没用的，每天会弹一次提醒。
+
+**不需要登录**。它读取你机器上各个工具已经写好的凭据（包括 Claude Desktop 自己的登录），而且每个产品都有**多条兜底路径**，某一条不通时自动换下一条。新版本在托盘菜单里一键安装。
 
 ## 安装
 
@@ -352,6 +370,10 @@ winget install Python.Python.3.12
 | `fix_push.bat` | push 失败时重试，并显示完整错误 |
 | `find_gh.bat` | PATH 没刷新导致找不到 git/gh 时定位它们 |
 | `uninstall.bat` | 移除开机自启、结束进程、可选删除配置 |
+
+## 套餐、积分与重置
+
+用量条下面列出各家账号接口返回的信息：套餐、订阅续费日期（Codex）或开始日期（Claude 不公开续费日期）、剩余积分或额外用量，以及**可用的额度重置**：Anthropic 和 OpenAI 发放的一次性重置，留在账号里直到用掉或过期，在各自应用的 Settings → Usage 里使用。有未使用的重置时，每天提醒一次（托盘菜单：*Remind me about unused resets*，时间用 `reset_reminder_hour` 设置）。
 
 ## 更新
 
@@ -408,6 +430,8 @@ Antigravity 内部跑一个语言服务器，启动参数里带 `--csrf_token`�
 - `icon_style` — `bars`（三条用量条）或 `ring`（圆环）
 - 每个 provider 的 `enabled` 改成 `false` 就不再采集它
 - 每个 provider 的 `order` 可以调整兜底顺序，或者直接删掉某条路径（比如嫌 `app_server` 每次都要起进程）
+- `check_updates` — 每天检查新版本
+- `remind_unused_resets` / `reset_reminder_hour` — 未使用重置的每日提醒及其时间
 
 ## 排错
 
@@ -424,8 +448,9 @@ Antigravity 内部跑一个语言服务器，启动参数里带 `--csrf_token`�
 
 | 现象 | 处理 |
 |---|---|
-| Claude 全部 FAIL | 在 cmd 里跑一次 `claude` 让它刷新 token |
-| `token expired` | 同上，用一次 Claude Code 就会自动续期 |
+| Claude 全部 FAIL | 打开 Claude Desktop 并确认已登录；或在 cmd 里跑一次 `claude` |
+| `token expired`（OAuth credentials） | 只要 *Claude Desktop login* 正常就无妨；Claude Code 使用时会自己续期 |
+| `Claude Desktop login: the saved login has expired` | 打开 Claude Desktop，它会自己续期登录 |
 | `App-Bound encryption (v20)` | 新版 Electron 的 cookie 解不开；改用 Claude Code 凭据，或把 `session_key` 填进配置 |
 | `could not copy the cookie DB` | cookie 库被 Claude Desktop 锁住；从它的托盘图标彻底退出一次，再点 *Refresh now* |
 | `blocked by Cloudflare` | `claude.ai` 拦截了请求；打开一次 Claude Desktop 刷新会话，或改用 Claude Code OAuth |
@@ -433,7 +458,7 @@ Antigravity 内部跑一个语言服务器，启动参数里带 `--csrf_token`�
 | Codex 显示 "partly from an offline snapshot" | 线上接口只返回了一个窗口，另一个来自日志。正常现象 |
 | Antigravity 显示 "IDE not running" | 打开 IDE，然后在托盘菜单点 *Refresh now* |
 | Claude Code 连不上你的代理端口 | 改 `claude_login.bat` 开头的 `PROXY_PORT`，运行它，再 `/login` |
-| 托盘没图标 | 在任务栏 `^` 里找找；或看 `%APPDATA%\QuotaTray\quota-tray.log` |
+| 托盘没图标 | 手动运行 `QuotaTray.exe`，会直接弹出面板。Windows 11 默认把新图标藏在 `^` 里，拖出来即可。启动失败会弹窗并写 `%APPDATA%\QuotaTray\crash.log` |
 | 面板不显示 / 报 tkinter | Python 安装时没勾 tcl/tk，重装 Python |
 | 某个百分比明显不对 | 把该 provider 的 `percent_scale` 从 `auto` 改成 `percent` |
 
@@ -441,15 +466,16 @@ Antigravity 内部跑一个语言服务器，启动参数里带 `--csrf_token`�
 
 ## 隐私
 
-- 凭据只用在 HTTP 的 `Authorization` / `Cookie` 头里，不写日志、不落盘、不发给任何第三方
-- 只连这几个域：`api.anthropic.com`、`claude.ai`、`chatgpt.com`、`127.0.0.1`
-- 所有网络请求都集中在 `quota_tray/providers/` 的三个文件里，整个面很小，可以自己读完
+- 凭据只用在 HTTP 的 `Authorization` / `Cookie` 头里，不写日志、不发给任何第三方。只读取 token，从不刷新，不会影响你的 Claude Code / Claude Desktop 登录
+- 唯一落盘的是最近一次可用的 Claude Desktop 会话 cookie，用 DPAPI 绑定你的 Windows 账户加密，存在 `%APPDATA%\QuotaTray\claude-session.bin`（Claude Desktop 锁住 cookie 文件时使用），可随时删除
+- 额度查询只连 `api.anthropic.com`、`claude.ai`、`chatgpt.com`、`127.0.0.1`；每日检查更新连 `api.github.com`、`github.com`、`raw.githubusercontent.com`（可用 `check_updates` 关闭）
+- 额度请求都在 `quota_tray/providers/` 里，更新检查在 `quota_tray/updater.py`，整个面很小，可以自己读完
 - `probe.bat` 生成报告时会脱敏 token 和 cookie，但 `_probe.txt` 里仍有本机路径，公开粘贴前先看一眼
 
 ## 开发
 
 ```powershell
-python tests\test_providers.py    # 37 项离线测试，不需要联网
+python tests\test_providers.py    # 85 项离线测试，不需要联网
 ```
 
 测试用伪造的响应跑通全部三条兜底链，覆盖 HTTP 401 降级、两种百分比口径（0–1 和 0–100）、窗口键名模糊匹配、跨来源合并、IDE 未运行、缓存往返和倒计时格式。
@@ -460,12 +486,7 @@ python tests\test_providers.py    # 37 项离线测试，不需要联网
 .\release.bat
 ```
 
-或者手动：
-
-```powershell
-git tag v1.0.1
-git push origin v1.0.1
-```
+或者不用 git：先改 `quota_tray/__init__.py` 里的 `__version__`，再到 **Actions → build → Run workflow** 填入同样的版本号（如 `v1.2.1`），它会自动打 tag 并发布。
 
 两种方式都会触发 [构建工作流](.github/workflows/build.yml)，自动把 exe、便携版 zip 和 SHA256 附到 Release 上。
 
@@ -473,6 +494,7 @@ git push origin v1.0.1
 
 - 这些都是各家的**内部接口**，没有公开文档，厂商随时可能改。解析器写成「递归查找 `utilization` / `used_percent` 字段」而不是写死路径，所以外层结构变了还能读；真失效了 `diagnose.bat` 会告诉你是哪条断的
 - Antigravity 必须开着 IDE
+- Claude 不公开续费日期，所以只显示订阅开始日期。Claude 新增的限额会先显示服务器给的内部代号（如 "Iguana Necktie"）
 - Codex 的会话日志兜底是快照，不是实时数据
 - Release 里的二进制未签名，见上面关于杀软误报的说明
 
