@@ -121,8 +121,9 @@ settings in `%APPDATA%\QuotaTray` are kept. Source installs can also just run
 | Order | Source |
 |---|---|
 | 1 | OAuth token from `~/.claude/.credentials.json` → `api.anthropic.com/api/oauth/usage` |
-| 2 | `sessionKey` decrypted out of Claude Desktop's Electron cookie store → `claude.ai` usage endpoints |
-| 3 | `session_key` pasted into `config.json` |
+| 2 | Claude Desktop's own login (`oauth:tokenCacheV2` in its `config.json`, decrypted with the app's key) → the same `api.anthropic.com` endpoint |
+| 3 | `sessionKey` decrypted out of Claude Desktop's Electron cookie store → `claude.ai` usage endpoints |
+| 4 | `session_key` pasted into `config.json` |
 
 Path 1 searches the `CLAUDE_CODE_OAUTH_TOKEN` env var, `CLAUDE_CONFIG_DIR`,
 `~/.claude`, `%APPDATA%\Claude`, `%LOCALAPPDATA%\Claude`, **and every WSL
@@ -366,8 +367,9 @@ exe、便携版、源码安装都适用，`%APPDATA%\QuotaTray` 里的设置会�
 | 顺序 | 来源 |
 |---|---|
 | 1 | `~/.claude/.credentials.json` 里的 OAuth token → `api.anthropic.com/api/oauth/usage` |
-| 2 | 从 Claude Desktop 的 Electron cookie 库解出 `sessionKey` → `claude.ai` 用量接口 |
-| 3 | 在 `config.json` 里手填的 `session_key` |
+| 2 | Claude Desktop 自己保存的登录（其 `config.json` 里的 `oauth:tokenCacheV2`，用应用密钥解密）→ 同一个 `api.anthropic.com` 接口 |
+| 3 | 从 Claude Desktop 的 Electron cookie 库解出 `sessionKey` → `claude.ai` 用量接口 |
+| 4 | 在 `config.json` 里手填的 `session_key` |
 
 第 2 条同时支持普通安装版（`%APPDATA%\Claude`）和微软商店版（`%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude`），即使 Claude Desktop 正占用 cookie 库也能读取；`claude.ai` 拒绝返回组织列表时，会改用 `lastActiveOrg` cookie。
 

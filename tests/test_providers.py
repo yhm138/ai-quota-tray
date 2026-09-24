@@ -178,6 +178,68 @@ r = claude.ClaudeProvider(Config({"providers": {"claude": {
 check("browser-fingerprint client is used for claude.ai", r.ok and "User-Agent" not in sent, sent)
 claude.web_session = lambda: None
 
+# Claude Desktop keeps its own OAuth login in config.json, encrypted with the
+# same OSCrypt key as its cookies.
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM   # noqa: E402
+
+from quota_tray.win import chromium_cookies as cc_mod           # noqa: E402
+
+desk_key = bytes(range(32))
+now_ms = now_utc().timestamp() * 1000
+
+
+def seal(obj):
+    nonce = b"\x02" * 12
+    blob = b"v10" + nonce + AESGCM(desk_key).encrypt(nonce, json.dumps(obj).encode(), None)
+    return __import__("base64").b64encode(blob).decode()
+
+
+desk = Path(tempfile.mkdtemp()) / "Claude"
+desk.mkdir()
+(desk / "Local State").write_text("{}")
+(desk / "config.json").write_text(json.dumps({
+    "oauth:tokenCache": seal({"old:u:https://api.anthropic.com:user:inference user:profile":
+                              {"token": "legacy-token", "expiresAt": now_ms + 9e6}}),
+    "oauth:tokenCacheV2": seal({
+        "i:u:https://api.anthropic.com:user:inference user:profile":
+            {"token": "live-token", "expiresAt": now_ms + 3.6e6, "refreshToken": "r"},
+        "i:u:https://api.anthropic.com:user:inference":
+            {"token": "narrow-token", "expiresAt": now_ms + 9e6},
+        "i:u:https://api.anthropic.com:user:profile user:inference x":
+            {"token": "dead-token", "expiresAt": now_ms - 1000},
+    }),
+    "windowBounds": {"x": 1},
+}))
+real_master = cc_mod.master_key
+cc_mod.master_key = lambda _p: desk_key
+try:
+    toks, notes = claude.desktop_oauth_tokens([desk])
+finally:
+    cc_mod.master_key = real_master
+check("desktop login: V2 full-scope token first",
+      [t for t, _ in toks][:1] == ["live-token"], (toks, notes))
+check("desktop login: expired entries dropped", "dead-token" not in [t for t, _ in toks])
+
+seen_auth = []
+
+
+def usage_get(url, headers=None, **_k):
+    seen_auth.append(headers.get("Authorization"))
+    return FakeResp(payload) if url == claude.OAUTH_USAGE_URL else FakeResp({}, 404)
+
+
+claude.discover_oauth_token = lambda s: (None, "", None, ["token expired"])
+claude.desktop_oauth_tokens = lambda: ([("live-token", "config.json [oauth:tokenCacheV2]")], [])
+claude.session = lambda: fake_session(get=usage_get)
+old_order = Config({"providers": {"claude": {
+    "order": ["oauth", "desktop_cookie", "manual_cookie"]}}})     # saved by v1.1.x
+p5 = claude.ClaudeProvider(old_order)
+p5.detect = lambda: True
+r = p5.fetch()
+check("desktop login works for configs saved before it existed",
+      r.ok and r.source == "Claude Desktop login" and seen_auth == ["Bearer live-token"],
+      (r.status, seen_auth))
+
 # ------------------------------------------------------------------ Codex
 
 print("\n--- Codex ---")

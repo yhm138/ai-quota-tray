@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.1.4
+
+- **Claude Desktop usage now comes from Claude Desktop's own login.** The
+  app keeps an OAuth token in its `config.json` (`oauth:tokenCacheV2`,
+  encrypted with the same key as its cookies). QuotaTray decrypts it and asks
+  `api.anthropic.com/api/oauth/usage`, the endpoint Claude Code's `/usage`
+  uses. This avoids both problems of the cookie route: Claude Desktop keeps
+  its cookie file exclusively locked while it runs, and `claude.ai` sits
+  behind Cloudflare. Works for the regular and the Microsoft Store install.
+  QuotaTray only reads the token; Claude Desktop keeps renewing it itself
+- Saved configs from older versions pick up the new source automatically
+
 ## v1.1.3
 
 - **A stuck old copy no longer blocks startup.** An old v1.0.0 process that
