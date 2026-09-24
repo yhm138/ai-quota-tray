@@ -111,6 +111,11 @@ distro's `~/.claude`** — plenty of people only ever signed in inside WSL.
 Claude Desktop and Claude Code draw from the same subscription pool, so these
 numbers are the budget the desktop app spends too.
 
+Path 2 covers both the regular installer (`%APPDATA%\Claude`) and the
+Microsoft Store build (`%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude`),
+reads the cookie DB even while Claude Desktop holds it open, and falls back to
+the `lastActiveOrg` cookie when `claude.ai` refuses the organization list.
+
 ### Codex
 
 | Order | Source |
@@ -194,6 +199,8 @@ Run **`diagnose.bat`** first. It prints the outcome of every source:
 | Every Claude source FAILs | Run `claude` once so it refreshes the token |
 | `token expired` | Same — using Claude Code renews it automatically |
 | `App-Bound encryption (v20)` | Newer Electron cookies can't be decrypted; use Claude Code credentials or paste a `session_key` into config |
+| `could not copy the cookie DB` | Claude Desktop locked the file; quit it from its tray icon once, then *Refresh now* |
+| `blocked by Cloudflare` | `claude.ai` challenged the request; open Claude Desktop so the session is fresh, or rely on Claude Code OAuth |
 | Codex "offline snapshot" | It fell through to the session-log path. Run `codex` once |
 | Codex "partly from an offline snapshot" | The live endpoint reported only one window; the other came from the log. Normal |
 | Antigravity "IDE not running" | Open the IDE, then *Refresh now* in the tray menu |
@@ -327,6 +334,8 @@ winget install Python.Python.3.12
 | 2 | 从 Claude Desktop 的 Electron cookie 库解出 `sessionKey` → `claude.ai` 用量接口 |
 | 3 | 在 `config.json` 里手填的 `session_key` |
 
+第 2 条同时支持普通安装版（`%APPDATA%\Claude`）和微软商店版（`%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude`），即使 Claude Desktop 正占用 cookie 库也能读取；`claude.ai` 拒绝返回组织列表时，会改用 `lastActiveOrg` cookie。
+
 第 1 条会搜索：环境变量 `CLAUDE_CODE_OAUTH_TOKEN`、`CLAUDE_CONFIG_DIR`、`~/.claude`、`%APPDATA%\Claude`、`%LOCALAPPDATA%\Claude`，**以及每个 WSL 发行版下的 `~/.claude`** —— 很多人只在 WSL 里登录过。Claude Desktop 和 Claude Code 共用同一个订阅额度池，所以这里的数字就是桌面端也在消耗的那份。
 
 ### Codex
@@ -372,6 +381,8 @@ Antigravity 内部跑一个语言服务器，启动参数里带 `--csrf_token`�
 | Claude 全部 FAIL | 在 cmd 里跑一次 `claude` 让它刷新 token |
 | `token expired` | 同上，用一次 Claude Code 就会自动续期 |
 | `App-Bound encryption (v20)` | 新版 Electron 的 cookie 解不开；改用 Claude Code 凭据，或把 `session_key` 填进配置 |
+| `could not copy the cookie DB` | cookie 库被 Claude Desktop 锁住；从它的托盘图标彻底退出一次，再点 *Refresh now* |
+| `blocked by Cloudflare` | `claude.ai` 拦截了请求；打开一次 Claude Desktop 刷新会话，或改用 Claude Code OAuth |
 | Codex 显示 "offline snapshot" | 走的是会话日志兜底；跑一次 `codex` 会刷新 |
 | Codex 显示 "partly from an offline snapshot" | 线上接口只返回了一个窗口，另一个来自日志。正常现象 |
 | Antigravity 显示 "IDE not running" | 打开 IDE，然后在托盘菜单点 *Refresh now* |
