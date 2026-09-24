@@ -36,3 +36,23 @@ def unprotect(data: bytes) -> bytes:
         return blob_out.value()
     finally:
         kernel32.LocalFree(blob_out.pbData)
+
+
+def protect(data: bytes) -> bytes:
+    """CryptProtectData in current-user scope. Raises OSError on failure."""
+    if sys.platform != "win32":
+        raise OSError("DPAPI is only available on Windows")
+    crypt32 = ctypes.WinDLL("crypt32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+    blob_in = _Blob.make(data)
+    blob_out = _Blob()
+    ok = crypt32.CryptProtectData(
+        ctypes.byref(blob_in), None, None, None, None, 0, ctypes.byref(blob_out)
+    )
+    if not ok:
+        raise OSError(f"CryptProtectData failed (code={ctypes.get_last_error()})")
+    try:
+        return blob_out.value()
+    finally:
+        kernel32.LocalFree(blob_out.pbData)

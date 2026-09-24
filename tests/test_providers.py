@@ -58,6 +58,8 @@ payload = {
                     "utilization": 12.0},
     "account": {"email_address": "me@example.com"},
 }
+# Route claude.ai calls through the fake `session` too, not a real curl_cffi one.
+claude.web_session = lambda: None
 claude.discover_oauth_token = lambda s: ("tok", "/fake/.credentials.json", "max", [])
 claude.session = lambda: fake_session(get=lambda *a, **k: FakeResp(payload))
 p = claude.ClaudeProvider(Config())
@@ -157,6 +159,22 @@ claude.session = lambda: fake_session(get=blocked_orgs_get)
 r = claude.ClaudeProvider(Config({"providers": {"claude": {
     "order": ["manual_cookie"], "session_key": "sk-fake"}}})).fetch()
 check("cloudflare block is named", "Cloudflare" in r.attempts[-1].detail, r.attempts[-1].detail)
+check("panel status names the real problem", "Cloudflare" in r.status, r.status)
+
+sent = {}
+
+
+class FakeWeb:
+    def get(self, url, headers=None, timeout=None):
+        sent.update(headers or {})
+        return FakeResp(usage if url.endswith("/usage") else orgs)
+
+
+claude.web_session = lambda: FakeWeb()
+r = claude.ClaudeProvider(Config({"providers": {"claude": {
+    "order": ["manual_cookie"], "session_key": "sk-fake"}}})).fetch()
+check("browser-fingerprint client is used for claude.ai", r.ok and "User-Agent" not in sent, sent)
+claude.web_session = lambda: None
 
 # ------------------------------------------------------------------ Codex
 
@@ -394,6 +412,31 @@ rows = [
 found = instances.parse_processes(rows, own, {99})
 check("other installs found, ours and strangers left alone",
       sorted(pid for pid, _ in found) == [10, 13], found)
+
+import logging                                                   # noqa: E402
+import os                                                        # noqa: E402
+
+from quota_tray import config as qt_config                       # noqa: E402
+
+log_file = Path(tempfile.mkdtemp()) / "qt.log"
+handler = qt_config._SafeRotatingFileHandler(log_file, maxBytes=200, backupCount=2,
+                                             encoding="utf-8", delay=True)
+handler.setFormatter(logging.Formatter("%(message)s"))
+real_rename = os.rename
+
+
+def locked_rename(*_a, **_k):
+    raise PermissionError(32, "The process cannot access the file")
+
+
+os.rename = locked_rename
+try:
+    for i in range(20):
+        handler.emit(logging.makeLogRecord({"msg": f"line {i:02d} " + "x" * 30}))
+finally:
+    os.rename = real_rename
+    handler.close()
+check("logging survives a locked log file", "line 19" in log_file.read_text(encoding="utf-8"))
 
 # ------------------------------------------------------------------ misc
 

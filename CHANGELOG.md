@@ -1,5 +1,25 @@
 # Changelog
 
+## v1.1.2
+
+- **Nothing happened on launch, and nothing was logged**: once the log
+  reached 512 KB, rotating it failed while another copy held it open, and
+  Python then dropped every log line. Rotation failures now keep appending.
+  Every launch is logged, and a crash shows a message box and writes
+  `crash.log` instead of vanishing
+- Starting QuotaTray by hand opens its panel (Windows 11 hides new tray
+  icons); starting it again while it runs opens the running copy's panel.
+  Run-at-login starts it quietly (`--autostart`)
+- **Claude Desktop**: `claude.ai` requests use a Chrome TLS fingerprint
+  (`curl_cffi`), since Cloudflare answers plain Python clients with a
+  challenge page. The last working session is kept (DPAPI-encrypted) for
+  when Claude Desktop holds its cookie file locked. The panel shows the
+  actual reason when Claude fails
+- **Diagnostics**: a plain summary of what is broken comes first, the view
+  keeps its scroll position when data refreshes, the mouse wheel no longer
+  double-scrolls, and *Open as text* opens the full report in Notepad
+- The release build checks that every bundled dependency loads (`--selftest`)
+
 ## v1.1.1
 
 - Starting QuotaTray from a new folder (say a downloaded `QuotaTray.exe` next
