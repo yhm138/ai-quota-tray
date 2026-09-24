@@ -51,6 +51,8 @@ DEFAULTS: dict[str, Any] = {
     "danger_percent": 90,                # red threshold
     "icon_style": "bars",                # bars | ring
     "check_updates": True,               # look for a new release once a day
+    "remind_unused_resets": True,        # daily notification about banked resets
+    "reset_reminder_hour": 10,           # ...from this local hour on
     "update_repo": "yhm138/ai-quota-tray",
     "providers": {
         "claude": {

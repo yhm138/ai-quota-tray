@@ -9,7 +9,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
-from . import APP_NAME, __version__, updater
+from . import APP_NAME, __version__, reminders, updater
 from .config import (
     CONFIG_PATH,
     Config,
@@ -135,6 +135,11 @@ class QuotaTrayApp:
             ),
             pystray.MenuItem("Check for updates", self._on_check_update),
             pystray.MenuItem(
+                "Remind me about unused resets",
+                self._on_toggle_reminders,
+                checked=lambda _i: bool(self.config.get("remind_unused_resets", True)),
+            ),
+            pystray.MenuItem(
                 "Run at login",
                 self._on_toggle_autostart,
                 checked=lambda _i: autostart.is_enabled(),
@@ -182,6 +187,33 @@ class QuotaTrayApp:
 
     def _on_show_diag(self, *_args) -> None:
         self._post(lambda: self.panel.show("diagnostics"))
+
+    def _on_toggle_reminders(self, *_args) -> None:
+        on = not self.config.get("remind_unused_resets", True)
+        self.config.data["remind_unused_resets"] = on
+        self.config.save()
+        try:
+            self.icon.update_menu()
+        except Exception:                                       # noqa: BLE001
+            pass
+
+    def _maybe_remind_resets(self) -> None:
+        if not self.config.get("remind_unused_resets", True):
+            return
+        now_local = datetime.now()
+        try:
+            hour = int(self.config.get("reset_reminder_hour", 10))
+        except (TypeError, ValueError):
+            hour = 10
+        if not reminders.due(self.config.get("last_reset_reminder"), now_local, hour):
+            return
+        text = reminders.unused_resets_text(self.results)
+        if not text:
+            return
+        log.info("reminding about unused resets: %s", text.replace("\n", " | "))
+        self._notify(text)
+        self.config.data["last_reset_reminder"] = now_local.date().isoformat()
+        self.config.save()
 
     def _on_toggle_autostart(self, *_args) -> None:
         if autostart.is_enabled():
@@ -280,6 +312,10 @@ class QuotaTrayApp:
         self.last_refresh = now_utc()
         self._save_cached()
         self._write_diag_file()
+        try:
+            self._maybe_remind_resets()
+        except Exception:                                       # noqa: BLE001
+            log.exception("reset reminder failed")
 
         try:
             self.icon.icon = self._icon_image()
@@ -339,6 +375,11 @@ class QuotaTrayApp:
                 lines.append(
                     f"   * {w.label}: {w.percent_text}" + (f"  (resets in {reset})" if reset else "")
                 )
+            for row in r.info:
+                lines.append(f"   {row.label or ' '}: {row.value}")
+            for g in r.resets:
+                exp = g.expires_at.astimezone().strftime("%Y-%m-%d %H:%M") if g.expires_at else "?"
+                lines.append(f"   reset x{g.count}, expires {exp}" + (f" ({g.note})" if g.note else ""))
             lines.append("")
         return "\n".join(lines)
 

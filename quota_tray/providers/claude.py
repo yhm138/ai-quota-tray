@@ -24,8 +24,10 @@ import sys
 from pathlib import Path
 
 from ..model import (
+    InfoRow,
     ProviderResult,
     QuotaWindow,
+    ResetGrant,
     SourceAttempt,
     apply_scale,
     decide_percent_scale,
@@ -36,13 +38,18 @@ from ..model import (
 )
 from ..config import app_dir
 from ..win.proc import run
+from .account import fmt_date, minor_amount, money, pretty_plan
 from .base import Provider, session
 
 log = logging.getLogger(__name__)
 
 OAUTH_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+OAUTH_PROFILE_URL = "https://api.anthropic.com/api/oauth/profile"
 OAUTH_BETA = "oauth-2025-04-20"
-CLAUDE_CODE_UA = "claude-code/2.0.0 (external, cli)"
+# The usage endpoint only reports banked limit resets ("cedar_ember") to the
+# Claude Code CLI; other user agents get ineligible_reason "surface".
+CLAUDE_CODE_UA = "claude-cli/2.1.280 (external, cli)"
+PROFILE_TTL = 6 * 3600
 BROWSER_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
@@ -293,12 +300,8 @@ class ClaudeProvider(Provider):
         try:
             resp = session().get(
                 OAUTH_USAGE_URL,
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "anthropic-beta": OAUTH_BETA,
-                    "User-Agent": CLAUDE_CODE_UA,
-                    "Accept": "application/json",
-                },
+                params={"cedar_ember": "1"},
+                headers=_oauth_headers(token),
                 timeout=20,
             )
         except Exception as exc:                                # noqa: BLE001
@@ -328,7 +331,11 @@ class ClaudeProvider(Provider):
             result.attempts.append(SourceAttempt(tag, False, "response was not JSON"))
             return False
 
-        windows = _build_windows(payload, self.settings.get("percent_scale", "auto"))
+        # Reset grants carry a percent_used field and spend is money, not a
+        # window: keep both out of the usage bars.
+        bars = {k: v for k, v in payload.items() if k not in _NOT_WINDOWS} \
+            if isinstance(payload, dict) else payload
+        windows = _build_windows(bars, self.settings.get("percent_scale", "auto"))
         if not windows:
             result.attempts.append(
                 SourceAttempt(tag, False, f"no quota fields in response: {str(payload)[:160]}")
@@ -342,6 +349,15 @@ class ClaudeProvider(Provider):
         result.account = _guess_account(payload)
         result.status = "connected"
         result.attempts.append(SourceAttempt(tag, True, origin))
+        try:
+            profile = _profile(token)
+            prof_plan, prof_account, rows = claude_profile_info(profile)
+            result.plan = prof_plan or result.plan
+            result.account = result.account or prof_account
+            result.info = rows + claude_spend_info(payload)
+            result.resets = claude_resets(payload)
+        except Exception:                                       # noqa: BLE001
+            log.debug("claude account details failed", exc_info=True)
         return True
 
     def _try_cookie(self, result: ProviderResult, session_key: str | None, tag: str) -> bool:
@@ -480,6 +496,110 @@ class ClaudeProvider(Provider):
                     next((a for a in failed if "Desktop" in a.name),
                          failed[-1] if failed else None))
         result.status = f"{best.name}: {best.detail}"[:200] if best else "no usable quota source"
+
+
+# ------------------------------------------------------------ plan, credits, resets
+
+_NOT_WINDOWS = ("cedar_ember", "spend")
+_PROFILES: dict[str, tuple[float, dict]] = {}
+
+
+def _oauth_headers(token: str) -> dict:
+    return {
+        "Authorization": f"Bearer {token}",
+        "anthropic-beta": OAUTH_BETA,
+        "User-Agent": CLAUDE_CODE_UA,
+        "Accept": "application/json",
+    }
+
+
+def _profile(token: str) -> dict:
+    """/api/oauth/profile, cached: the plan changes rarely."""
+    import hashlib
+    import time
+
+    key = hashlib.sha256(token.encode()).hexdigest()
+    hit = _PROFILES.get(key)
+    if hit and time.time() - hit[0] < PROFILE_TTL:
+        return hit[1]
+    resp = session().get(OAUTH_PROFILE_URL, headers=_oauth_headers(token), timeout=20)
+    data = resp.json() if resp.status_code == 200 else {}
+    data = data if isinstance(data, dict) else {}
+    _PROFILES[key] = (time.time(), data)
+    return data
+
+
+def claude_profile_info(profile: dict) -> tuple[str | None, str | None, list[InfoRow]]:
+    """(plan, account, rows) from /api/oauth/profile."""
+    account = profile.get("account") if isinstance(profile.get("account"), dict) else {}
+    org = profile.get("organization") if isinstance(profile.get("organization"), dict) else {}
+    plan = pretty_plan(org.get("rate_limit_tier")) or pretty_plan(org.get("organization_type"))
+    if not plan:
+        if account.get("has_claude_max"):
+            plan = "Max"
+        elif account.get("has_claude_pro"):
+            plan = "Pro"
+    rows: list[InfoRow] = []
+    status = org.get("subscription_status")
+    if plan:
+        value = plan if not status else f"{plan} \u00b7 {status}"
+        rows.append(InfoRow("Plan", value, "" if status in (None, "active") else "warn"))
+    started = parse_time_safe(org.get("subscription_created_at"))
+    if started:
+        # Anthropic exposes no renewal date; say what is known, infer nothing.
+        rows.append(InfoRow("Subscribed", f"since {fmt_date(started)}"))
+    email = account.get("email_address") or account.get("email")
+    return plan, email if isinstance(email, str) else None, rows
+
+
+def claude_spend_info(usage: dict) -> list[InfoRow]:
+    """Extra usage (pay-as-you-go credit beyond the plan) from the usage reply."""
+    spend = usage.get("spend") if isinstance(usage, dict) else None
+    if not isinstance(spend, dict):
+        return []
+    if spend.get("enabled") is False:
+        return [InfoRow("Extra usage", "off")]
+    used = minor_amount(spend.get("used"))
+    limit = minor_amount(spend.get("limit"))
+    currency = (spend.get("used") or {}).get("currency") if isinstance(spend.get("used"), dict) else None
+    if used is None:
+        return []
+    if limit:
+        left = max(0.0, limit - used)
+        tone = "warn" if left <= limit * 0.1 else ""
+        return [InfoRow("Extra usage", f"{money(used, currency)} of {money(limit, currency)} used \u00b7 "
+                                       f"{money(left, currency)} left", tone)]
+    return [InfoRow("Extra usage", f"{money(used, currency)} used")]
+
+
+def claude_resets(usage: dict) -> list[ResetGrant]:
+    """Banked limit resets ("cedar_ember" grants) from the usage reply."""
+    node = usage.get("cedar_ember") if isinstance(usage, dict) else None
+    if not isinstance(node, dict) or node.get("eligible") is False:
+        return []
+    out = []
+    for grant in node.get("grants") or []:
+        if not isinstance(grant, dict) or grant.get("paused"):
+            continue
+        left = grant.get("resets_left")
+        if not isinstance(left, int) or left <= 0:
+            continue
+        clears = [c for c in grant.get("clears") or [] if isinstance(c, str)]
+        bits = []
+        if clears:
+            bits.append("clears " + " + ".join(_label_for(c)[0] for c in clears))
+        if grant.get("use_requires_limit"):
+            bits.append("usable once you hit a limit")
+        elif grant.get("usable_now"):
+            bits.append("usable now")
+        out.append(ResetGrant(left, parse_time_safe(grant.get("ends_at")), ", ".join(bits)))
+    return out
+
+
+def parse_time_safe(value):
+    from ..model import parse_time
+
+    return parse_time(value)
 
 
 # ------------------------------------------------------------ Claude Desktop login

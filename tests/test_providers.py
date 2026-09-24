@@ -237,7 +237,7 @@ p5 = claude.ClaudeProvider(old_order)
 p5.detect = lambda: True
 r = p5.fetch()
 check("desktop login works for configs saved before it existed",
-      r.ok and r.source == "Claude Desktop login" and seen_auth == ["Bearer live-token"],
+      r.ok and r.source == "Claude Desktop login" and seen_auth[:1] == ["Bearer live-token"],
       (r.status, seen_auth))
 
 # ------------------------------------------------------------------ Codex
@@ -501,6 +501,108 @@ finally:
     os.rename = real_rename
     handler.close()
 check("logging survives a locked log file", "line 19" in log_file.read_text(encoding="utf-8"))
+
+# ------------------------------------------------------------------ plan, credits, resets
+
+print("\n--- plan, credits, resets ---")
+from quota_tray import reminders                                  # noqa: E402
+from quota_tray.providers import account                          # noqa: E402
+
+check("plan names", [account.pretty_plan(x) for x in
+                     ("default_claude_max_20x", "prolite", "plus", "default_claude_ai")]
+      == ["Max 20x", "Pro Lite", "Plus", "Free"])
+
+soon_iso = (now_utc() + timedelta(days=2)).isoformat()
+later_iso = (now_utc() + timedelta(days=20)).isoformat()
+claude_usage = {
+    "five_hour": {"utilization": 30.0, "resets_at": later_iso},
+    "seven_day": {"utilization": 60.0, "resets_at": later_iso},
+    "spend": {"used": {"amount_minor": 1359, "currency": "USD", "exponent": 2},
+              "limit": {"amount_minor": 5000, "currency": "USD", "exponent": 2},
+              "percent": 27, "enabled": True},
+    "cedar_ember": {"eligible": True, "grants": [
+        {"id": "g1", "resets_total": 1, "resets_left": 1, "ends_at": later_iso,
+         "clears": ["five_hour", "seven_day"], "usable_now": True, "percent_used": 0},
+        {"id": "g2", "resets_left": 0, "ends_at": later_iso},
+        {"id": "g3", "resets_left": 2, "ends_at": later_iso, "paused": True},
+    ]},
+}
+profile = {"account": {"has_claude_max": True, "email_address": "me@example.com"},
+           "organization": {"organization_type": "claude_max",
+                            "rate_limit_tier": "default_claude_max_20x",
+                            "subscription_status": "active",
+                            "subscription_created_at": "2026-04-10T15:53:44.244879Z"}}
+
+
+def account_get(url, **_k):
+    if url == claude.OAUTH_USAGE_URL:
+        return FakeResp(claude_usage)
+    if url == claude.OAUTH_PROFILE_URL:
+        return FakeResp(profile)
+    return FakeResp({}, 404)
+
+
+claude.session = lambda: fake_session(get=account_get)
+claude._PROFILES.clear()
+claude.discover_oauth_token = lambda s: ("tok-acct", "/fake/.credentials.json", None, [])
+p6 = claude.ClaudeProvider(Config({"providers": {"claude": {"order": ["oauth"]}}}))
+p6.detect = lambda: True
+r = p6.fetch()
+check("claude: grants and spend stay out of the bars", sorted(w.key for w in r.windows)
+      == ["five_hour", "seven_day"], [w.key for w in r.windows])
+check("claude: plan from profile", r.plan == "Max 20x" and r.account == "me@example.com",
+      (r.plan, r.account))
+info = {row.label: row.value for row in r.info}
+check("claude: extra usage money", info.get("Extra usage") == "$13.59 of $50.00 used \u00b7 $36.41 left",
+      info)
+check("claude: subscribed since", info.get("Subscribed", "").startswith("since Apr 10"), info)
+check("claude: one usable reset (paused and spent grants skipped)",
+      r.resets_available == 1 and "5-hour window + 7-day window" in r.resets[0].note,
+      [(g.count, g.note) for g in r.resets])
+rt = ProviderResult.from_cache(json.loads(json.dumps(r.to_cache())))
+check("details survive the cache", rt.resets_available == 1 and len(rt.info) == len(r.info))
+
+wham_full = {
+    "plan_type": "prolite",
+    "rate_limit": {"primary_window": {"used_percent": 10, "limit_window_seconds": 18000},
+                   "secondary_window": {"used_percent": 20, "limit_window_seconds": 604800}},
+    "credits": {"has_credits": True, "unlimited": False, "balance": "1026.11",
+                "overage_limit_reached": False},
+    "spend_control": {"reached": False, "individual_limit": {
+        "unit": "credit", "limit": "2500", "used": "501.77", "used_percent": 20,
+        "reset_at": 1790812800}},
+    "rate_limit_reset_credits": {"available_count": 2},
+}
+reset_list = {"available_count": 2, "credits": [
+    {"granted_at": "2026-09-01T00:00:00Z", "expires_at": soon_iso},
+    {"granted_at": "2026-09-05T00:00:00Z", "expires_at": later_iso}]}
+sub = {"plan_type": "pro", "active_until": later_iso, "billing_period": "monthly",
+       "will_renew": True, "is_delinquent": False}
+plan, rows = codex.codex_account_info(wham_full, sub, {})
+vals = {row.label: row.value for row in rows}
+check("codex: plan and renewal", plan == "Pro Lite" and vals["Subscription"].startswith("renews")
+      and "(monthly)" in vals["Subscription"], vals)
+check("codex: credits in dollars", vals.get("Credits") == "1,026 left (~$41.04)", vals)
+check("codex: spend limit", vals.get("Spend limit", "").startswith("502 of 2,500 credits"), vals)
+grants = codex.codex_resets(wham_full, reset_list)
+check("codex: resets with expiry", sum(g.count for g in grants) == 2
+      and all(g.expires_at for g in grants), grants)
+check("codex: count without the list", sum(g.count for g in codex.codex_resets(wham_full, {})) == 2)
+_hdr = __import__("base64").urlsafe_b64encode(json.dumps({"https://api.openai.com/auth": {
+    "chatgpt_plan_type": "plus", "chatgpt_subscription_active_until": later_iso}}).encode()).decode()
+plan, rows = codex.codex_account_info({}, {}, codex.jwt_claims(f"x.{_hdr.rstrip('=')}.y"))
+check("codex: login-token fallback", plan == "Plus" and "may be stale" in rows[-1].value, rows)
+
+cr = ProviderResult("codex", "Codex", ok=True)
+cr.resets = grants
+text = reminders.unused_resets_text([r, cr])
+check("reminder lists both providers", text and "Claude: 1 unused reset" in text
+      and "Codex: 2 unused resets" in text, text)
+check("no reminder without resets", reminders.unused_resets_text([ProviderResult("x", "X")]) is None)
+morning = datetime(2026, 9, 24, 9, 0)
+check("reminder waits for the hour", not reminders.due(None, morning, 10))
+check("reminder once a day", reminders.due(None, morning.replace(hour=11), 10)
+      and not reminders.due("2026-09-24", morning.replace(hour=11), 10))
 
 # ------------------------------------------------------------------ misc
 
