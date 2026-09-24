@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v1.0.1
 
 - **Claude Desktop**: find the Microsoft Store (MSIX) install's data directory
 - **Claude Desktop**: read the cookie DB while the app has it open, instead of
