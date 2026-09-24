@@ -47,6 +47,7 @@ RESET_CREDITS_URL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credi
 SUBSCRIPTIONS_URL = "https://chatgpt.com/backend-api/subscriptions"
 CREDITS_PER_DOLLAR = 25.0          # Codex credits are sold at 25 to the dollar
 EXTRAS_TTL = 3600
+EXTRAS_RETRY = 300
 _EXTRAS: dict[str, tuple[float, dict, dict]] = {}
 
 
@@ -296,29 +297,43 @@ def jwt_claims(token) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def _account_extras(headers: dict, account_id) -> tuple[dict, dict]:
-    """(reset credits, subscription), cached for an hour per account."""
+def _account_extras(headers: dict, account_id) -> tuple[dict, dict, list[str]]:
+    """(reset credits, subscription, notes). Successful answers are cached
+    for an hour per account; failures are retried after a few minutes."""
     import time
 
     key = str(account_id or headers.get("Authorization", ""))[-40:]
     hit = _EXTRAS.get(key)
-    if hit and time.time() - hit[0] < EXTRAS_TTL:
-        return hit[1], hit[2]
+    if hit and time.time() - hit[0] < (EXTRAS_TTL if hit[3] else EXTRAS_RETRY):
+        return hit[1], hit[2], hit[4]
+    notes: list[str] = []
 
-    def get(url, **params):
-        try:
-            resp = session().get(url, headers={**headers, "OpenAI-Beta": "codex-1",
-                                               "originator": "codex_cli_rs"},
-                                 params=params or None, timeout=20)
-            data = resp.json() if resp.status_code == 200 else {}
-        except Exception:                                       # noqa: BLE001
-            data = {}
-        return data if isinstance(data, dict) else {}
+    def get(name, url, **params):
+        # The official client sends the same headers as wham/usage; a
+        # community workaround adds these two, so try that second.
+        for extra in ({}, {"OpenAI-Beta": "codex-1", "originator": "Codex Desktop"}):
+            try:
+                resp = session().get(url, headers={**headers, **extra},
+                                     params=params or None, timeout=20)
+            except Exception as exc:                            # noqa: BLE001
+                notes.append(f"{name}: {exc.__class__.__name__}")
+                return None
+            if resp.status_code == 200:
+                try:
+                    data = resp.json()
+                except ValueError:
+                    notes.append(f"{name}: not JSON")
+                    return None
+                return data if isinstance(data, dict) else None
+            status = resp.status_code
+        notes.append(f"{name}: HTTP {status}")
+        return None
 
-    resets = get(RESET_CREDITS_URL)
-    subscription = get(SUBSCRIPTIONS_URL, account_id=account_id) if account_id else {}
-    _EXTRAS[key] = (time.time(), resets, subscription)
-    return resets, subscription
+    resets = get("reset list", RESET_CREDITS_URL)
+    subscription = get("subscription", SUBSCRIPTIONS_URL, account_id=account_id) if account_id else {}
+    complete = resets is not None and subscription is not None
+    _EXTRAS[key] = (time.time(), resets or {}, subscription or {}, complete, notes)
+    return resets or {}, subscription or {}, notes
 
 
 def codex_account_info(usage: dict, subscription: dict, claims: dict) -> tuple[str | None, list[InfoRow]]:
@@ -376,20 +391,49 @@ def codex_account_info(usage: dict, subscription: dict, claims: dict) -> tuple[s
     return plan, rows
 
 
+def _count(value) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return None
+
+
+def codex_reset_count(usage: dict, reset_payload: dict) -> int | None:
+    """Available resets per the list endpoint, else the usage summary."""
+    count = _count(reset_payload.get("available_count"))
+    if count is None and isinstance(usage, dict):
+        node = usage.get("rate_limit_reset_credits")
+        count = _count(node.get("available_count")) if isinstance(node, dict) else None
+    return count
+
+
 def codex_resets(usage: dict, reset_payload: dict) -> list[ResetGrant]:
-    """Banked rate-limit resets, with expiry dates when the list endpoint answers."""
+    """Banked rate-limit resets, shaped like the official client reads them:
+    wham/rate-limit-reset-credits lists credits with a status ("available"
+    or not), expires_at and a title such as "Full reset (Weekly + 5 hr)";
+    wham/usage carries only rate_limit_reset_credits.available_count."""
     grants = []
     for credit in reset_payload.get("credits") or []:
-        if isinstance(credit, dict) and not credit.get("used_at") and not credit.get("consumed_at"):
-            grants.append(ResetGrant(1, parse_time(credit.get("expires_at")), "resets Codex limits"))
-    count = reset_payload.get("available_count")
-    if not isinstance(count, int):
-        node = usage.get("rate_limit_reset_credits") if isinstance(usage, dict) else None
-        count = node.get("available_count") if isinstance(node, dict) else None
-    if isinstance(count, int) and count > sum(g.count for g in grants):
-        # Known to exist, but the expiry list did not come back.
-        grants.append(ResetGrant(count - sum(g.count for g in grants), None, "resets Codex limits"))
-    if isinstance(count, int) and count < len(grants):
+        if not isinstance(credit, dict):
+            continue
+        status = credit.get("status")
+        if status is not None and str(status).lower() != "available":
+            continue
+        if credit.get("redeemed_at") or credit.get("redeem_started_at"):
+            continue
+        note = credit.get("title") or "resets Codex limits"
+        if credit.get("description"):
+            note = f"{note} ({credit['description']})"
+        grants.append(ResetGrant(1, parse_time(credit.get("expires_at")), str(note)))
+    count = codex_reset_count(usage, reset_payload)
+    listed = len(grants)
+    if count is not None and count > listed:
+        # Known to exist, but the list did not come back with details.
+        grants.append(ResetGrant(count - listed, None, "resets Codex limits"))
+    if count is not None and count < listed:
         grants = sorted(grants, key=lambda g: g.expires_at or now_utc())[:count]
     return grants
 
@@ -477,14 +521,32 @@ class CodexProvider(Provider):
         result.status = "connected"
         result.data_time = now_utc()
         result.attempts.append(SourceAttempt("ChatGPT usage API", True, origin))
+        # Each detail on its own: one failing must not hide the others.
+        resets_payload, subscription, notes = {}, {}, []
         try:
-            resets_payload, subscription = _account_extras(headers, account_id)
+            resets_payload, subscription, notes = _account_extras(headers, account_id)
+        except Exception as exc:                                # noqa: BLE001
+            notes = [f"account details: {exc!r}"]
+        try:
             plan, rows = codex_account_info(payload, subscription, jwt_claims(tokens.get("id_token")))
             result.plan = plan or result.plan
             result.info = rows
+        except Exception as exc:                                # noqa: BLE001
+            notes.append(f"plan/credits: {exc!r}")
+        try:
             result.resets = codex_resets(payload, resets_payload)
-        except Exception:                                       # noqa: BLE001
-            log.debug("codex account details failed", exc_info=True)
+            count = codex_reset_count(payload, resets_payload)
+            if not result.resets:
+                # Always say something, so a missing line is never a mystery.
+                if count == 0:
+                    result.info.append(InfoRow("Resets", "none available"))
+                else:
+                    why = "; ".join(n for n in notes if n.startswith("reset")) or "not reported"
+                    result.info.append(InfoRow("Resets", f"unknown ({why})", "warn"))
+        except Exception as exc:                                # noqa: BLE001
+            notes.append(f"resets: {exc!r}")
+        if notes:
+            result.attempts.append(SourceAttempt("Codex account details", False, "; ".join(notes)))
         return True
 
     # ---------------- 2. app-server

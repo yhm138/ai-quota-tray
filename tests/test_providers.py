@@ -593,6 +593,55 @@ _hdr = __import__("base64").urlsafe_b64encode(json.dumps({"https://api.openai.co
 plan, rows = codex.codex_account_info({}, {}, codex.jwt_claims(f"x.{_hdr.rstrip('=')}.y"))
 check("codex: login-token fallback", plan == "Plus" and "may be stale" in rows[-1].value, rows)
 
+# Shape from openai/codex backend-client tests (rate_limit_resets_tests.rs).
+official = {"credits": [
+    {"id": "credit-1", "reset_type": "codex_rate_limits", "status": "available",
+     "granted_at": "2026-06-17T00:00:00Z", "expires_at": later_iso, "redeemed_at": None,
+     "title": "Full reset (Weekly + 5 hr)", "description": "Ready to redeem"},
+    {"id": "credit-2", "reset_type": "codex_rate_limits", "status": "available",
+     "granted_at": "2026-06-18T00:00:00Z", "expires_at": None},
+    {"id": "credit-3", "status": "redeemed", "expires_at": later_iso,
+     "redeemed_at": "2026-09-01T00:00:00Z"},
+], "available_count": 2, "total_earned_count": 4}
+og = codex.codex_resets({}, official)
+check("codex: only available credits count", sum(g.count for g in og) == 2, og)
+check("codex: reset title kept", any("Full reset (Weekly + 5 hr)" in g.note for g in og), og)
+check("codex: string counts accepted",
+      codex.codex_reset_count({"rate_limit_reset_credits": {"available_count": "1"}}, {}) == 1)
+
+
+def wham_run(usage_payload, reset_status, reset_body):
+    codex._EXTRAS.clear()
+
+    def get(url, headers=None, **_k):
+        if url == codex.WHAM_URL:
+            return FakeResp(usage_payload)
+        if url == codex.RESET_CREDITS_URL:
+            return FakeResp(reset_body, reset_status)
+        return FakeResp({}, 404)
+
+    codex.session = lambda: fake_session(get=get)
+    prov = codex.CodexProvider(Config({"providers": {"codex": {"order": ["wham"]}}}))
+    prov.detect = lambda: True
+    prov._auth_tokens = lambda: ({"access_token": "t", "account_id": "acc"}, "/fake/auth.json")
+    return prov.fetch()
+
+
+base_usage = {"plan_type": "pro", "rate_limit": wham_full["rate_limit"]}
+rw = wham_run(base_usage, 200, official)
+check("codex e2e: resets from the list", rw.resets_available == 2, rw.resets)
+rw = wham_run({**base_usage, "rate_limit_reset_credits": {"available_count": 0}}, 403, {})
+check("codex e2e: zero shows 'none available'",
+      any(i.label == "Resets" and i.value == "none available" for i in rw.info), rw.info)
+rw = wham_run(base_usage, 403, {})
+row = next((i for i in rw.info if i.label == "Resets"), None)
+check("codex e2e: failure is shown, not hidden", row is not None and "HTTP 403" in row.value, rw.info)
+check("codex e2e: failure in diagnostics",
+      any(a.name == "Codex account details" and "HTTP 403" in a.detail for a in rw.attempts),
+      rw.attempts)
+rw = wham_run({**base_usage, "rate_limit_reset_credits": {"available_count": 1}}, 403, {})
+check("codex e2e: count survives a failed list", rw.resets_available == 1, rw.resets)
+
 cr = ProviderResult("codex", "Codex", ok=True)
 cr.resets = grants
 text = reminders.unused_resets_text([r, cr])
