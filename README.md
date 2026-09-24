@@ -10,7 +10,7 @@
   <a href="../../actions/workflows/build.yml"><img alt="build" src="../../actions/workflows/build.yml/badge.svg"></a>
   <a href="../../actions/workflows/test.yml"><img alt="tests" src="../../actions/workflows/test.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
-  <a href="../../releases/latest"><img alt="release" src="https://img.shields.io/github/v/release/OWNER/QuotaTray?include_prereleases"></a>
+  <a href="../../releases/latest"><img alt="release" src="https://img.shields.io/github/v/release/yhm138/ai-quota-tray?include_prereleases"></a>
 </p>
 
 <p align="center">
@@ -65,7 +65,7 @@ Get-FileHash .\QuotaTray.exe -Algorithm SHA256
 ### Option 2 — from source
 
 ```powershell
-git clone https://github.com/OWNER/QuotaTray.git
+git clone https://github.com/yhm138/ai-quota-tray.git
 cd QuotaTray
 .\install.bat
 ```
@@ -94,6 +94,25 @@ winget install Python.Python.3.12
 | `fix_push.bat` | Retry a failed push with the full error shown |
 | `find_gh.bat` | Locate git/gh when a stale PATH hides them |
 | `uninstall.bat` | Remove run-at-login, stop the process, optionally delete config |
+
+## Updating
+
+**From v1.1.0 on**, QuotaTray checks for a new release once a day. When one is
+out, right-click the tray icon and choose **Update to vX.Y.Z and restart**.
+It downloads the release, checks its SHA256, swaps the program in place and
+starts again. *Check for updates* in the same menu checks right away.
+
+**Coming from v1.0.x** (no update button yet), open PowerShell and paste:
+
+```powershell
+irm https://raw.githubusercontent.com/yhm138/ai-quota-tray/main/update.ps1 | iex
+```
+
+It finds your install through its run-at-login entry (or the running
+process), stops it, installs the latest release over it and starts it again.
+It works for `QuotaTray.exe`, the portable folder and source installs, and
+settings in `%APPDATA%\QuotaTray` are kept. Source installs can also just run
+`update.bat`. Every run is logged to `%APPDATA%\QuotaTray\update.log`.
 
 ## Where the numbers come from
 
@@ -296,7 +315,7 @@ Get-FileHash .\QuotaTray.exe -Algorithm SHA256
 ### 方式二：从源码运行
 
 ```powershell
-git clone https://github.com/OWNER/QuotaTray.git
+git clone https://github.com/yhm138/ai-quota-tray.git
 cd QuotaTray
 .\install.bat
 ```
@@ -323,6 +342,22 @@ winget install Python.Python.3.12
 | `fix_push.bat` | push 失败时重试，并显示完整错误 |
 | `find_gh.bat` | PATH 没刷新导致找不到 git/gh 时定位它们 |
 | `uninstall.bat` | 移除开机自启、结束进程、可选删除配置 |
+
+## 更新
+
+**v1.1.0 起**，QuotaTray 每天自动检查一次新版本。有新版时，右键托盘图标，点
+**Update to vX.Y.Z and restart**：自动下载、校验 SHA256、原地替换并重启。
+菜单里的 *Check for updates* 可立即检查。
+
+**从 v1.0.x 升级**（旧版还没有更新按钮），打开 PowerShell 粘贴：
+
+```powershell
+irm https://raw.githubusercontent.com/yhm138/ai-quota-tray/main/update.ps1 | iex
+```
+
+脚本会通过开机自启项（或正在运行的进程）找到你的安装位置，停掉它、装上最新版并重新启动。
+exe、便携版、源码安装都适用，`%APPDATA%\QuotaTray` 里的设置会保留。源码安装也可以直接运行
+`update.bat`。每次更新的记录在 `%APPDATA%\QuotaTray\update.log`。
 
 ## 额度是从哪里读的
 

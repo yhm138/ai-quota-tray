@@ -1,6 +1,21 @@
 # Changelog
 
+## v1.1.0
+
+- **Updates**: QuotaTray checks for a new release once a day and shows
+  *Update to vX.Y.Z and restart* in the tray menu; one click downloads it,
+  verifies its SHA256, replaces the program in place and restarts it.
+  *Check for updates* checks on demand, and `QuotaTray.exe --update` does the
+  same from the command line. Turn the daily check off with
+  `"check_updates": false` in config.json
+- `update.ps1` / `update.bat` update an existing install (exe, portable or
+  source) in place; run-at-login keeps working because nothing moves
+- Releases can be cut from the Actions tab (*build > Run workflow* with a
+  version) without pushing a tag
+
 ## v1.0.1
+
+This release was never published; its changes ship in v1.1.0.
 
 - **Claude Desktop**: find the Microsoft Store (MSIX) install's data directory
 - **Claude Desktop**: read the cookie DB while the app has it open, instead of

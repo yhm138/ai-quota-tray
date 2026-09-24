@@ -15,11 +15,19 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 
 BUILD_YML = r"""name: build
 
-# Tag a commit to publish a release:  git tag v1.0.0 && git push origin v1.0.0
+# Publish a release either way:
+#   - push a tag:          git tag v1.0.0 && git push origin v1.0.0
+#   - or, without git:     Actions > build > Run workflow, version = v1.0.0
+#     (the tag is created on the chosen branch's head commit)
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Release tag to create, e.g. v1.1.0 (empty = build only)"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -33,6 +41,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: Check the version matches the code
+        if: startsWith(inputs.version, 'v')
+        env:
+          WANT: ${{ inputs.version }}
+        run: |
+          $have = "v" + (python -c "import quota_tray; print(quota_tray.__version__)")
+          if ($have -ne $env:WANT) { throw "asked to release $env:WANT but the code says $have" }
 
       - name: Install dependencies
         run: |
@@ -99,15 +115,17 @@ jobs:
           path: release/
 
       - name: Publish the release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || startsWith(inputs.version, 'v')
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.version }}
         run: |
-          gh release create "${{ github.ref_name }}" `
+          gh release create "$env:TAG" `
             release\QuotaTray.exe `
             release\QuotaTray-portable.zip `
             release\SHA256SUMS.txt `
-            --title "QuotaTray ${{ github.ref_name }}" `
+            --target "${{ github.sha }}" `
+            --title "QuotaTray $env:TAG" `
             --generate-notes
 """
 
