@@ -60,7 +60,7 @@ DEFAULTS: dict[str, Any] = {
             "session_key": "",           # manual fallback: claude.ai sessionKey cookie
             "credentials_path": "",      # manual fallback: .credentials.json path
             "scan_wsl": True,
-            "order": ["oauth", "desktop_cookie", "manual_cookie"],
+            "order": ["oauth", "desktop_oauth", "desktop_cookie", "manual_cookie"],
         },
         "codex": {
             "enabled": True,

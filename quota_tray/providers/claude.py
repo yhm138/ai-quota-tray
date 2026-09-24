@@ -5,15 +5,21 @@ Fallback chain (reorder or trim it via providers.claude.order in config.json):
                         -> api.anthropic.com/api/oauth/usage
                         Credentials are looked up in: env vars, CLAUDE_CONFIG_DIR,
                         ~/.claude, %APPDATA%\\Claude, and every WSL distro's ~/.claude
-  2. desktop_cookie  -- decrypt the sessionKey cookie out of Claude Desktop's
+  2. desktop_oauth   -- the OAuth token Claude Desktop keeps for itself in
+                        config.json (oauth:tokenCacheV2, encrypted with the
+                        app's OSCrypt key) -> the same api.anthropic.com
+                        endpoint. No cookie file, no claude.ai, no Cloudflare
+  3. desktop_cookie  -- decrypt the sessionKey cookie out of Claude Desktop's
                         Electron cookie store -> claude.ai usage endpoints
-  3. manual_cookie   -- a session_key the user pasted into config.json
+  4. manual_cookie   -- a session_key the user pasted into config.json
 """
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -264,6 +270,26 @@ class ClaudeProvider(Provider):
                 )
             )
             return False
+        label = f"Claude Code OAuth ({Path(origin).name if os.sep in origin else origin})"
+        return self._usage_with_token(result, token, "OAuth credentials", label, origin, plan)
+
+    def _try_desktop_oauth(self, result: ProviderResult) -> bool:
+        tag = "Claude Desktop login"
+        tokens, notes = desktop_oauth_tokens()
+        if not tokens:
+            result.attempts.append(
+                SourceAttempt(tag, False, "; ".join(notes[-3:]) or "no Claude Desktop login found")
+            )
+            return False
+        for token, where in tokens[:2]:
+            if self._usage_with_token(result, token, tag, "Claude Desktop login", where, None):
+                return True
+        return False
+
+    def _usage_with_token(
+        self, result: ProviderResult, token: str, tag: str, label: str, origin: str, plan
+    ) -> bool:
+        """Call the OAuth usage endpoint with a bearer token and fill result."""
         try:
             resp = session().get(
                 OAUTH_USAGE_URL,
@@ -276,44 +302,46 @@ class ClaudeProvider(Provider):
                 timeout=20,
             )
         except Exception as exc:                                # noqa: BLE001
-            result.attempts.append(SourceAttempt("OAuth credentials", False, f"request failed: {exc}"))
+            result.attempts.append(SourceAttempt(tag, False, f"request failed: {exc}"))
             return False
 
-        if resp.status_code == 401:
+        if resp.status_code in (401, 403):
+            hint = ("open Claude Desktop so it renews its login" if "Desktop" in tag
+                    else "sign in to Claude Code again")
             result.attempts.append(
-                SourceAttempt("OAuth credentials", False, "token rejected, sign in to Claude Code again")
+                SourceAttempt(tag, False, f"token rejected (HTTP {resp.status_code}), {hint}")
             )
             return False
         if resp.status_code == 429:
             result.attempts.append(
-                SourceAttempt("OAuth credentials", False, "rate limited (429), will retry on next refresh")
+                SourceAttempt(tag, False, "rate limited (429), will retry on next refresh")
             )
             return False
         if resp.status_code >= 400:
             result.attempts.append(
-                SourceAttempt("OAuth credentials", False, f"HTTP {resp.status_code}: {resp.text[:160]}")
+                SourceAttempt(tag, False, f"HTTP {resp.status_code}: {resp.text[:160]}")
             )
             return False
         try:
             payload = resp.json()
         except ValueError:
-            result.attempts.append(SourceAttempt("OAuth credentials", False, "response was not JSON"))
+            result.attempts.append(SourceAttempt(tag, False, "response was not JSON"))
             return False
 
         windows = _build_windows(payload, self.settings.get("percent_scale", "auto"))
         if not windows:
             result.attempts.append(
-                SourceAttempt("OAuth credentials", False, f"no quota fields in response: {str(payload)[:160]}")
+                SourceAttempt(tag, False, f"no quota fields in response: {str(payload)[:160]}")
             )
             return False
 
         result.windows = windows
         result.ok = True
-        result.source = f"Claude Code OAuth ({Path(origin).name if os.sep in origin else origin})"
+        result.source = label
         result.plan = plan or _guess_plan(payload)
         result.account = _guess_account(payload)
         result.status = "connected"
-        result.attempts.append(SourceAttempt("OAuth credentials", True, origin))
+        result.attempts.append(SourceAttempt(tag, True, origin))
         return True
 
     def _try_cookie(self, result: ProviderResult, session_key: str | None, tag: str) -> bool:
@@ -426,9 +454,16 @@ class ClaudeProvider(Provider):
         return False
 
     def collect(self, result: ProviderResult) -> None:
-        order = self.settings.get("order") or ["oauth", "desktop_cookie", "manual_cookie"]
+        order = list(self.settings.get("order") or DEFAULT_ORDER)
+        # config.json stores the whole list, so installs from before
+        # desktop_oauth existed would never try it. A list that still has
+        # desktop_cookie is such a saved default: add it right before that.
+        if "desktop_oauth" not in order and "desktop_cookie" in order:
+            order.insert(order.index("desktop_cookie"), "desktop_oauth")
         for step in order:
             if step == "oauth" and self._try_oauth(result):
+                return
+            if step == "desktop_oauth" and self._try_desktop_oauth(result):
                 return
             if step == "desktop_cookie" and self._try_cookie(result, None, "Claude Desktop cookie"):
                 return
@@ -441,8 +476,104 @@ class ClaudeProvider(Provider):
             return
         # Name the real problem in the panel, preferring the desktop session.
         failed = [a for a in result.attempts if not a.ok]
-        best = next((a for a in failed if "Desktop" in a.name), failed[-1] if failed else None)
+        best = next((a for a in failed if a.name == "Claude Desktop login"),
+                    next((a for a in failed if "Desktop" in a.name),
+                         failed[-1] if failed else None))
         result.status = f"{best.name}: {best.detail}"[:200] if best else "no usable quota source"
+
+
+# ------------------------------------------------------------ Claude Desktop login
+
+DEFAULT_ORDER = ["oauth", "desktop_oauth", "desktop_cookie", "manual_cookie"]
+# Newest layout first: current builds keep the live grant in V2 and leave a
+# stale grant under the old key.
+DESKTOP_TOKEN_CACHE_KEYS = ("oauth:tokenCacheV2", "oauth:tokenCache")
+
+
+def parse_desktop_token_cache(plaintext: str, now_ms: float) -> list[tuple[tuple, str]]:
+    """[(rank, access token)] from a decrypted Claude Desktop token cache.
+
+    The cache maps "<install>:<user>:<base url>:<scopes>" to
+    {"token", "expiresAt", "refreshToken"}; usage needs user:inference and
+    user:profile. Expired entries are dropped.
+    """
+    try:
+        entries = json.loads(plaintext)
+    except ValueError:
+        return []
+    if not isinstance(entries, dict):
+        return []
+    out = []
+    for key, entry in entries.items():
+        if not isinstance(entry, dict):
+            continue
+        token = entry.get("token") or entry.get("accessToken")
+        if not isinstance(token, str) or not token.strip():
+            continue
+        expires = entry.get("expiresAt")
+        if isinstance(expires, (int, float)) and expires < now_ms:
+            continue
+        scopes = set(re.findall(r"user:[a-z_]+", str(key)))
+        rank = ("user:inference" in scopes and "user:profile" in scopes,
+                "user:inference" in scopes,
+                float(expires) if isinstance(expires, (int, float)) else 0.0)
+        out.append((rank, token.strip()))
+    return out
+
+
+def desktop_oauth_tokens(roots: list[Path] | None = None) -> tuple[list[tuple[str, str]], list[str]]:
+    """Every usable Claude Desktop OAuth token, best first: [(token, where)]."""
+    from ..win import chromium_cookies as cc
+
+    notes: list[str] = []
+    if roots is None:
+        roots = cc.app_roots("Claude")
+    found: list[tuple[tuple, str, str]] = []
+    now_ms = now_utc().timestamp() * 1000
+    for root in roots:
+        cfg = root / "config.json"
+        try:
+            data = json.loads(cfg.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, ValueError):
+            notes.append(f"{root.name}: no readable config.json")
+            continue
+        caches = [(k, data.get(k)) for k in DESKTOP_TOKEN_CACHE_KEYS
+                  if isinstance(data, dict) and isinstance(data.get(k), str) and data.get(k)]
+        if not caches:
+            notes.append(f"{root.name}: config.json has no saved login (sign in to Claude Desktop)")
+            continue
+        local_state = cc.find_local_state(root)
+        if local_state is None:
+            notes.append(f"{root.name}: no Local State next to config.json")
+            continue
+        try:
+            key = cc.master_key(local_state)
+        except Exception as exc:                                # noqa: BLE001
+            notes.append(f"{root.name}: could not unwrap the app key ({exc})")
+            continue
+        before = len(found)
+        for name, value in caches:
+            try:
+                blob = base64.b64decode(value)
+                if not blob.startswith(b"v10"):
+                    raise ValueError("not a v10 value")
+                plain = cc._aesgcm_decrypt(key, blob).decode("utf-8", "replace")
+            except Exception as exc:                            # noqa: BLE001
+                notes.append(f"{root.name}: could not decrypt {name} ({exc.__class__.__name__})")
+                continue
+            for rank, token in parse_desktop_token_cache(plain, now_ms):
+                # V2 outranks the legacy key at equal quality.
+                found.append(((*rank[:2], name.endswith("V2"), rank[2]), token, f"{cfg} [{name}]"))
+        if len(found) == before:
+            notes.append(f"{root.name}: the saved login has expired (open Claude Desktop to renew it)")
+    found.sort(key=lambda item: item[0], reverse=True)
+    seen: set[str] = set()
+    tokens = []
+    for _rank, token, where in found:
+        if token not in seen:
+            seen.add(token)
+            tokens.append((token, where))
+    return tokens, notes
 
 
 # ------------------------------------------------------------ claude.ai transport
