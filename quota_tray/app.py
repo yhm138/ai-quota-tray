@@ -16,6 +16,7 @@ from .config import (
     DIAG_PATH,
     LOG_PATH,
     acquire_single_instance,
+    install_dir,
     load_cache,
     save_cache,
     setup_logging,
@@ -488,6 +489,27 @@ def run_update() -> int:
     return 0
 
 
+def _take_over() -> bool:
+    """Another QuotaTray holds the lock. If it runs from a different folder,
+    the user just started this copy on purpose: stop that one and take over."""
+    import time
+
+    from .win import instances
+
+    others = instances.other_copies(install_dir())
+    if not others:
+        return False
+    for pid, folder in others:
+        log.info("stopping the QuotaTray running from %s (pid %s)", folder, pid)
+        instances.stop(pid)
+    for _ in range(20):
+        if acquire_single_instance():
+            return True
+        time.sleep(0.5)
+    log.warning("the other copy did not exit in time")
+    return False
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if "--update" in argv:
@@ -499,14 +521,21 @@ def main(argv: list[str] | None = None) -> int:
 
     setup_logging(verbose="--verbose" in argv)
     if not acquire_single_instance():
-        log.info("another instance is already running, exiting")
-        return 0
-    log.info("%s v%s starting", APP_NAME, __version__)
+        if "--no-takeover" in argv or not _take_over():
+            log.info("another instance is already running, exiting")
+            return 0
+    log.info("%s v%s starting from %s", APP_NAME, __version__, install_dir())
     app = QuotaTrayApp()
-    # Enable run-at-login on the first run only; after that the tray menu wins.
-    if "--no-autostart" not in argv and not app.config.get("autostart_initialized"):
-        autostart.enable()
-        app.config.data["autostart_initialized"] = True
-        app.config.save()
+    if "--no-autostart" not in argv:
+        if not app.config.get("autostart_initialized"):
+            # Enable run-at-login on the first run only; after that the menu wins.
+            autostart.enable()
+            app.config.data["autostart_initialized"] = True
+            app.config.save()
+        elif autostart.is_enabled() and autostart.registered_command() != autostart.launch_command():
+            # Run-at-login points at another copy (an older install, say):
+            # the copy that is running now takes it over.
+            log.info("run-at-login pointed at %s, moving it here", autostart.registered_command())
+            autostart.enable()
     app.start()
     return 0
