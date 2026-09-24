@@ -335,7 +335,7 @@ def codex_account_info(usage: dict, subscription: dict, claims: dict) -> tuple[s
     if until:
         period = subscription.get("billing_period")
         if subscription.get("is_delinquent"):
-            rows.append(InfoRow("Subscription", f"payment problem · paid until {fmt_date(until)}", "warn"))
+            rows.append(InfoRow("Subscription", f"payment problem \u00b7 paid until {fmt_date(until)}", "warn"))
         elif subscription.get("will_renew") is False:
             rows.append(InfoRow("Subscription", f"ends {fmt_date(until)} (won't renew)",
                                 "warn" if soon(until, 7) else ""))
@@ -357,7 +357,7 @@ def codex_account_info(usage: dict, subscription: dict, claims: dict) -> tuple[s
             if balance is not None:
                 text = f"{balance:,.0f} left (~${balance / CREDITS_PER_DOLLAR:,.2f})"
                 if credits.get("overage_limit_reached"):
-                    rows.append(InfoRow("Credits", text + " · overage limit reached", "warn"))
+                    rows.append(InfoRow("Credits", text + " \u00b7 overage limit reached", "warn"))
                 else:
                     rows.append(InfoRow("Credits", text))
 

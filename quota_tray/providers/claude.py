@@ -542,7 +542,7 @@ def claude_profile_info(profile: dict) -> tuple[str | None, str | None, list[Inf
     rows: list[InfoRow] = []
     status = org.get("subscription_status")
     if plan:
-        value = plan if not status else f"{plan} · {status}"
+        value = plan if not status else f"{plan} \u00b7 {status}"
         rows.append(InfoRow("Plan", value, "" if status in (None, "active") else "warn"))
     started = parse_time_safe(org.get("subscription_created_at"))
     if started:
@@ -567,7 +567,7 @@ def claude_spend_info(usage: dict) -> list[InfoRow]:
     if limit:
         left = max(0.0, limit - used)
         tone = "warn" if left <= limit * 0.1 else ""
-        return [InfoRow("Extra usage", f"{money(used, currency)} of {money(limit, currency)} used · "
+        return [InfoRow("Extra usage", f"{money(used, currency)} of {money(limit, currency)} used \u00b7 "
                                        f"{money(left, currency)} left", tone)]
     return [InfoRow("Extra usage", f"{money(used, currency)} used")]
 

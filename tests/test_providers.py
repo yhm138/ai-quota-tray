@@ -553,7 +553,7 @@ check("claude: grants and spend stay out of the bars", sorted(w.key for w in r.w
 check("claude: plan from profile", r.plan == "Max 20x" and r.account == "me@example.com",
       (r.plan, r.account))
 info = {row.label: row.value for row in r.info}
-check("claude: extra usage money", info.get("Extra usage") == "$13.59 of $50.00 used · $36.41 left",
+check("claude: extra usage money", info.get("Extra usage") == "$13.59 of $50.00 used \u00b7 $36.41 left",
       info)
 check("claude: subscribed since", info.get("Subscribed", "").startswith("since Apr 10"), info)
 check("claude: one usable reset (paused and spent grants skipped)",

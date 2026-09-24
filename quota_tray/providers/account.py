@@ -48,7 +48,7 @@ def pretty_plan(raw: str | None) -> str | None:
 
 
 def money(amount, currency: str | None = "USD") -> str:
-    symbol = {"USD": "$", "EUR": "€", "GBP": "£"}.get((currency or "USD").upper())
+    symbol = {"USD": "$", "EUR": "\u20ac", "GBP": "\u00a3"}.get((currency or "USD").upper())
     return f"{symbol}{amount:,.2f}" if symbol else f"{amount:,.2f} {currency}"
 
 
@@ -83,9 +83,9 @@ def reset_rows(resets: list[ResetGrant], where: str) -> list[InfoRow]:
         return []
     total = sum(g.count for g in active)
     first = min((g.expires_at for g in active if g.expires_at), default=None)
-    value = f"{total} unused" + (f" · first expires {fmt_expiry(first)}" if first else "")
+    value = f"{total} unused" + (f" \u00b7 first expires {fmt_expiry(first)}" if first else "")
     rows = [InfoRow("Resets", value, "warn" if soon(first, 3) else "good")]
     notes = {g.note for g in active if g.note}
     if notes:
-        rows.append(InfoRow("", "; ".join(sorted(notes)) + f" · use in {where}"))
+        rows.append(InfoRow("", "; ".join(sorted(notes)) + f" \u00b7 use in {where}"))
     return rows
