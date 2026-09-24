@@ -253,6 +253,8 @@ class Panel:
                 anchor="e",
             ).grid(row=i, column=3, sticky="e", padx=(6, 0), pady=3)
 
+        self._account_details(inner, result)
+
         foot_bits = []
         if result.source:
             foot_bits.append(result.source)
@@ -266,6 +268,31 @@ class Panel:
                 fg=theme.FG_FAINT,
                 font=self.f_small,
             ).pack(anchor="w", pady=(8, 0))
+
+    def _account_details(self, parent, result: ProviderResult) -> None:
+        """Plan, subscription, credits and banked resets under the bars."""
+        from ..providers.account import reset_rows
+
+        where = {"claude": "Claude > Settings > Usage", "codex": "Codex > Settings > Usage"}
+        rows = list(result.info) + reset_rows(
+            result.resets, where.get(result.provider_id, "the app's usage settings")
+        )
+        if not rows:
+            return
+        box = tk.Frame(parent, bg=theme.BG_CARD)
+        box.pack(fill="x", pady=(8, 0))
+        box.columnconfigure(1, weight=1)
+        tones = {"good": theme.OK, "warn": theme.WARN}
+        for i, row in enumerate(rows):
+            tk.Label(
+                box, text=row.label, bg=theme.BG_CARD, fg=theme.FG_FAINT,
+                font=self.f_small, anchor="w",
+            ).grid(row=i, column=0, sticky="nw", padx=(0, 10), pady=1)
+            tk.Label(
+                box, text=row.value, bg=theme.BG_CARD,
+                fg=tones.get(row.tone, theme.FG_DIM), font=self.f_small,
+                anchor="w", justify="left", wraplength=WIDTH - 150,
+            ).grid(row=i, column=1, sticky="w", pady=1)
 
     def _draw_bar(self, canvas: tk.Canvas, window, warn, danger) -> None:
         canvas.delete("all")

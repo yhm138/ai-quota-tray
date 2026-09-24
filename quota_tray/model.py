@@ -33,6 +33,28 @@ class QuotaWindow:
 
 
 @dataclass
+class InfoRow:
+    """One line of account detail under the usage bars, e.g. Plan: Max 20x."""
+
+    label: str
+    value: str
+    tone: str = ""                         # "" | "good" | "warn"
+
+
+@dataclass
+class ResetGrant:
+    """A banked limit reset: saved on the account until used or expired."""
+
+    count: int
+    expires_at: datetime | None = None
+    note: str = ""                         # what it clears, when it can be used
+
+    def active(self, now: datetime | None = None) -> bool:
+        now = now or now_utc()
+        return self.count > 0 and (self.expires_at is None or self.expires_at > now)
+
+
+@dataclass
 class SourceAttempt:
     """Diagnostic record for one collection attempt."""
 
@@ -55,6 +77,18 @@ class ProviderResult:
     data_time: datetime | None = None      # when the data itself was produced
     attempts: list[SourceAttempt] = field(default_factory=list)
     installed: bool = True                 # is the product present on this machine
+    info: list[InfoRow] = field(default_factory=list)       # plan, renewal, credits
+    resets: list[ResetGrant] = field(default_factory=list)  # banked limit resets
+
+    def active_resets(self, now: datetime | None = None) -> list[ResetGrant]:
+        return sorted(
+            (g for g in self.resets if g.active(now)),
+            key=lambda g: g.expires_at or datetime.max.replace(tzinfo=timezone.utc),
+        )
+
+    @property
+    def resets_available(self) -> int:
+        return sum(g.count for g in self.active_resets())
 
     @property
     def worst_percent(self) -> float | None:
@@ -88,6 +122,11 @@ class ProviderResult:
                 }
                 for w in self.windows
             ],
+            "info": [{"label": i.label, "value": i.value, "tone": i.tone} for i in self.info],
+            "resets": [
+                {"count": g.count, "expires_at": _iso(g.expires_at), "note": g.note}
+                for g in self.resets
+            ],
         }
 
     @classmethod
@@ -112,6 +151,14 @@ class ProviderResult:
                 exhausted=bool(w.get("exhausted")),
             )
             for w in d.get("windows", [])
+        ]
+        r.info = [
+            InfoRow(i.get("label", ""), i.get("value", ""), i.get("tone", ""))
+            for i in d.get("info", []) if isinstance(i, dict)
+        ]
+        r.resets = [
+            ResetGrant(int(g.get("count") or 0), parse_time(g.get("expires_at")), g.get("note", ""))
+            for g in d.get("resets", []) if isinstance(g, dict)
         ]
         return r
 

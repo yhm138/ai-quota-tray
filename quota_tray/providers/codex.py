@@ -24,6 +24,8 @@ from pathlib import Path
 from typing import Iterator
 
 from ..model import (
+    InfoRow,
+    ResetGrant,
     ProviderResult,
     QuotaWindow,
     SourceAttempt,
@@ -35,11 +37,17 @@ from ..model import (
     parse_time,
 )
 from ..win.proc import popen
+from .account import fmt_date, soon, pretty_plan, to_float
 from .base import Provider, session
 
 log = logging.getLogger(__name__)
 
 WHAM_URL = "https://chatgpt.com/backend-api/wham/usage"
+RESET_CREDITS_URL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"
+SUBSCRIPTIONS_URL = "https://chatgpt.com/backend-api/subscriptions"
+CREDITS_PER_DOLLAR = 25.0          # Codex credits are sold at 25 to the dollar
+EXTRAS_TTL = 3600
+_EXTRAS: dict[str, tuple[float, dict, dict]] = {}
 
 
 def codex_home(settings: dict) -> Path:
@@ -271,6 +279,121 @@ def iter_lines_reverse(
             yield tail.decode("utf-8", "replace")
 
 
+# ------------------------------------------------------------ plan, credits, resets
+
+
+def jwt_claims(token) -> dict:
+    """Claims of a JWT, unverified (we only read our own login token)."""
+    import base64
+
+    if not isinstance(token, str) or token.count(".") < 2:
+        return {}
+    part = token.split(".")[1]
+    try:
+        data = json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
+    except (ValueError, TypeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _account_extras(headers: dict, account_id) -> tuple[dict, dict]:
+    """(reset credits, subscription), cached for an hour per account."""
+    import time
+
+    key = str(account_id or headers.get("Authorization", ""))[-40:]
+    hit = _EXTRAS.get(key)
+    if hit and time.time() - hit[0] < EXTRAS_TTL:
+        return hit[1], hit[2]
+
+    def get(url, **params):
+        try:
+            resp = session().get(url, headers={**headers, "OpenAI-Beta": "codex-1",
+                                               "originator": "codex_cli_rs"},
+                                 params=params or None, timeout=20)
+            data = resp.json() if resp.status_code == 200 else {}
+        except Exception:                                       # noqa: BLE001
+            data = {}
+        return data if isinstance(data, dict) else {}
+
+    resets = get(RESET_CREDITS_URL)
+    subscription = get(SUBSCRIPTIONS_URL, account_id=account_id) if account_id else {}
+    _EXTRAS[key] = (time.time(), resets, subscription)
+    return resets, subscription
+
+
+def codex_account_info(usage: dict, subscription: dict, claims: dict) -> tuple[str | None, list[InfoRow]]:
+    """(plan, rows): plan, subscription end, credits, spend limit."""
+    auth = claims.get("https://api.openai.com/auth") if isinstance(claims, dict) else None
+    auth = auth if isinstance(auth, dict) else {}
+    plan = pretty_plan(usage.get("plan_type")) or pretty_plan(subscription.get("plan_type")) \
+        or pretty_plan(auth.get("chatgpt_plan_type"))
+    rows: list[InfoRow] = []
+    if plan:
+        rows.append(InfoRow("Plan", plan))
+
+    until = parse_time(subscription.get("active_until"))
+    if until:
+        period = subscription.get("billing_period")
+        if subscription.get("is_delinquent"):
+            rows.append(InfoRow("Subscription", f"payment problem · paid until {fmt_date(until)}", "warn"))
+        elif subscription.get("will_renew") is False:
+            rows.append(InfoRow("Subscription", f"ends {fmt_date(until)} (won't renew)",
+                                "warn" if soon(until, 7) else ""))
+        else:
+            rows.append(InfoRow("Subscription", f"renews {fmt_date(until)}"
+                                + (f" ({period})" if isinstance(period, str) else "")))
+    else:
+        claimed = parse_time(auth.get("chatgpt_subscription_active_until"))
+        if claimed:
+            rows.append(InfoRow("Subscription", f"active until {fmt_date(claimed)} "
+                                                "(from the login token, may be stale)"))
+
+    credits = usage.get("credits")
+    if isinstance(credits, dict) and (credits.get("has_credits") or credits.get("unlimited")):
+        if credits.get("unlimited"):
+            rows.append(InfoRow("Credits", "unlimited", "good"))
+        else:
+            balance = to_float(credits.get("balance"))
+            if balance is not None:
+                text = f"{balance:,.0f} left (~${balance / CREDITS_PER_DOLLAR:,.2f})"
+                if credits.get("overage_limit_reached"):
+                    rows.append(InfoRow("Credits", text + " · overage limit reached", "warn"))
+                else:
+                    rows.append(InfoRow("Credits", text))
+
+    spend = usage.get("spend_control")
+    limit = spend.get("individual_limit") if isinstance(spend, dict) else None
+    if isinstance(limit, dict):
+        used, cap = to_float(limit.get("used")), to_float(limit.get("limit"))
+        if used is not None and cap:
+            unit = limit.get("unit") or "credit"
+            reset = parse_time(limit.get("reset_at"))
+            rows.append(InfoRow(
+                "Spend limit",
+                f"{used:,.0f} of {cap:,.0f} {unit}s" + (f", resets {fmt_date(reset)}" if reset else ""),
+                "warn" if spend.get("reached") else "",
+            ))
+    return plan, rows
+
+
+def codex_resets(usage: dict, reset_payload: dict) -> list[ResetGrant]:
+    """Banked rate-limit resets, with expiry dates when the list endpoint answers."""
+    grants = []
+    for credit in reset_payload.get("credits") or []:
+        if isinstance(credit, dict) and not credit.get("used_at") and not credit.get("consumed_at"):
+            grants.append(ResetGrant(1, parse_time(credit.get("expires_at")), "resets Codex limits"))
+    count = reset_payload.get("available_count")
+    if not isinstance(count, int):
+        node = usage.get("rate_limit_reset_credits") if isinstance(usage, dict) else None
+        count = node.get("available_count") if isinstance(node, dict) else None
+    if isinstance(count, int) and count > sum(g.count for g in grants):
+        # Known to exist, but the expiry list did not come back.
+        grants.append(ResetGrant(count - sum(g.count for g in grants), None, "resets Codex limits"))
+    if isinstance(count, int) and count < len(grants):
+        grants = sorted(grants, key=lambda g: g.expires_at or now_utc())[:count]
+    return grants
+
+
 class CodexProvider(Provider):
     id = "codex"
     name = "Codex"
@@ -354,6 +477,14 @@ class CodexProvider(Provider):
         result.status = "connected"
         result.data_time = now_utc()
         result.attempts.append(SourceAttempt("ChatGPT usage API", True, origin))
+        try:
+            resets_payload, subscription = _account_extras(headers, account_id)
+            plan, rows = codex_account_info(payload, subscription, jwt_claims(tokens.get("id_token")))
+            result.plan = plan or result.plan
+            result.info = rows
+            result.resets = codex_resets(payload, resets_payload)
+        except Exception:                                       # noqa: BLE001
+            log.debug("codex account details failed", exc_info=True)
         return True
 
     # ---------------- 2. app-server
@@ -522,6 +653,10 @@ class CodexProvider(Provider):
                 buckets.add(key)
                 merged.append(window)
                 added = True
+            if probe.info and not result.info:
+                result.info = probe.info
+            if probe.resets and not result.resets:
+                result.resets = probe.resets
             if added:
                 sources.append(probe.source or name)
                 if probe.plan and not result.plan:

@@ -1,5 +1,21 @@
 # Changelog
 
+## v1.2.0
+
+- **Plan, subscription and credits** under each provider's bars:
+  - Claude: plan tier and status (`/api/oauth/profile`), subscription start
+    date (Anthropic exposes no renewal date, so none is guessed), and extra
+    usage spent / cap / left
+  - Codex: plan, renewal or end date from `backend-api/subscriptions` (falls
+    back to the login token's date, marked as possibly stale), credit balance
+    with its dollar value, and the workspace spend limit
+- **Banked limit resets**: how many unused resets each account has and when
+  the first one expires (Claude's grants from the usage reply, Codex's from
+  `wham/rate-limit-reset-credits`). Shown amber when one expires within 3 days
+- **Daily reminder** about unused resets, once a day from 10:00 local time,
+  naming the soonest expiry. Toggle it in the tray menu (*Remind me about
+  unused resets*); change the hour with `reset_reminder_hour` in config.json
+
 ## v1.1.4
 
 - **Claude Desktop usage now comes from Claude Desktop's own login.** The

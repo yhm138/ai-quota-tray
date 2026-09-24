@@ -95,6 +95,15 @@ winget install Python.Python.3.12
 | `find_gh.bat` | Locate git/gh when a stale PATH hides them |
 | `uninstall.bat` | Remove run-at-login, stop the process, optionally delete config |
 
+## Plan, credits and resets
+
+Under the usage bars each card lists what the account API reports: the plan,
+when the subscription renews (Codex) or started (Claude, which publishes no
+renewal date), credits or extra usage left, and **banked limit resets**, the
+one-time resets Anthropic and OpenAI hand out that sit on your account until
+you use them or they expire. If you have unused resets, QuotaTray reminds you
+once a day (tray menu: *Remind me about unused resets*).
+
 ## Updating
 
 **From v1.1.0 on**, QuotaTray checks for a new release once a day. When one is
