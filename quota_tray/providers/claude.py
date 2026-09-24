@@ -28,6 +28,7 @@ from ..model import (
     node_used,
     now_utc,
 )
+from ..config import app_dir
 from ..win.proc import run
 from .base import Provider, session
 
@@ -318,7 +319,9 @@ class ClaudeProvider(Provider):
     def _try_cookie(self, result: ProviderResult, session_key: str | None, tag: str) -> bool:
         notes: list[str] = []
         jar: dict[str, str] = {}
-        if not session_key:
+        from_desktop = not session_key
+        cached = False
+        if from_desktop:
             if sys.platform != "win32":
                 result.attempts.append(
                     SourceAttempt(tag, False, "reading desktop cookies is Windows-only")
@@ -327,6 +330,13 @@ class ClaudeProvider(Provider):
             from ..win.chromium_cookies import get_cookies
 
             jar, notes = get_cookies("Claude", "%claude.ai", "sessionKey")
+            if jar.get("sessionKey"):
+                save_cached_session(jar)
+            else:
+                # Claude Desktop can hold its cookie file locked while it runs;
+                # fall back to the session read the last time it was readable.
+                jar = load_cached_session()
+                cached = bool(jar.get("sessionKey"))
             session_key = jar.get("sessionKey")
         if not session_key:
             result.attempts.append(
@@ -343,7 +353,6 @@ class ClaudeProvider(Provider):
                 cookie[name] = jar[name]
         headers = {
             "Cookie": "; ".join(f"{k}={v}" for k, v in cookie.items()),
-            "User-Agent": BROWSER_UA,
             "Accept": "application/json",
             "Referer": "https://claude.ai/",
             "anthropic-client-platform": "web_claude_ai",
@@ -351,9 +360,7 @@ class ClaudeProvider(Provider):
         org_id, account, plan = None, None, None
         org_error = ""
         try:
-            orgs_resp = session().get(
-                "https://claude.ai/api/organizations", headers=headers, timeout=20
-            )
+            orgs_resp = _web_get("https://claude.ai/api/organizations", headers)
         except Exception as exc:                                # noqa: BLE001
             orgs_resp, org_error = None, f"claude.ai request failed: {exc}"
         if orgs_resp is not None:
@@ -383,7 +390,7 @@ class ClaudeProvider(Provider):
         ):
             name = url.rsplit("/", 1)[-1]
             try:
-                resp = session().get(url, headers=headers, timeout=20)
+                resp = _web_get(url, headers)
             except Exception as exc:                            # noqa: BLE001
                 problems.append(f"{name}: {exc}")
                 continue
@@ -399,14 +406,20 @@ class ClaudeProvider(Provider):
             if windows:
                 result.windows = windows
                 result.ok = True
-                result.source = f"Claude Desktop cookie ({url.rsplit('/', 1)[-1]})"
+                result.source = f"Claude Desktop session ({url.rsplit('/', 1)[-1]})" + (
+                    ", saved copy" if cached else ""
+                )
                 result.account = account
                 result.plan = plan or _guess_plan(payload)
                 result.status = "connected"
                 result.attempts.append(SourceAttempt(tag, True, url))
                 return True
             problems.append(f"{name}: no quota fields")
+        if from_desktop and any("rejected" in p for p in [org_error, *problems]):
+            forget_cached_session()
         detail = "; ".join(problems[:2]) or "no quota fields in the claude.ai endpoints"
+        if cached:
+            detail = f"(using the saved session, Claude Desktop's cookie file was unreadable) {detail}"
         if org_error:
             detail = f"{org_error}; {detail}"
         result.attempts.append(SourceAttempt(tag, False, detail))
@@ -425,8 +438,77 @@ class ClaudeProvider(Provider):
                     return
         if not result.installed:
             result.status = "Claude not detected"
-        else:
-            result.status = "no usable quota source - see Diagnostics"
+            return
+        # Name the real problem in the panel, preferring the desktop session.
+        failed = [a for a in result.attempts if not a.ok]
+        best = next((a for a in failed if "Desktop" in a.name), failed[-1] if failed else None)
+        result.status = f"{best.name}: {best.detail}"[:200] if best else "no usable quota source"
+
+
+# ------------------------------------------------------------ claude.ai transport
+
+
+def web_session():
+    """claude.ai sits behind Cloudflare, which challenges clients whose TLS
+    handshake is not a browser's. curl_cffi reproduces Chrome's; plain
+    requests is only the fallback when it is missing."""
+    try:
+        from curl_cffi import requests as curl_requests
+    except Exception:                                           # noqa: BLE001
+        return None
+    global _WEB
+    if _WEB is None:
+        _WEB = curl_requests.Session(impersonate="chrome")
+    return _WEB
+
+
+_WEB = None
+
+
+def _web_get(url: str, headers: dict):
+    web = web_session()
+    if web is not None:
+        # The impersonated browser brings its own matching User-Agent.
+        return web.get(url, headers=headers, timeout=20)
+    return session().get(url, headers={**headers, "User-Agent": BROWSER_UA}, timeout=20)
+
+
+# ------------------------------------------------------------ saved session
+
+
+def _session_cache_path() -> Path:
+    return app_dir() / "claude-session.bin"
+
+
+def save_cached_session(jar: dict) -> None:
+    if sys.platform != "win32":
+        return
+    keep = {k: jar[k] for k in ("sessionKey", *_FORWARD_COOKIES) if jar.get(k)}
+    try:
+        from ..win.dpapi import protect
+
+        _session_cache_path().write_bytes(protect(json.dumps(keep).encode("utf-8")))
+    except Exception:                                           # noqa: BLE001
+        log.debug("could not save the Claude session", exc_info=True)
+
+
+def load_cached_session() -> dict:
+    if sys.platform != "win32":
+        return {}
+    try:
+        from ..win.dpapi import unprotect
+
+        data = json.loads(unprotect(_session_cache_path().read_bytes()).decode("utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:                                           # noqa: BLE001
+        return {}
+
+
+def forget_cached_session() -> None:
+    try:
+        _session_cache_path().unlink()
+    except OSError:
+        pass
 
 
 _FORWARD_COOKIES = ("lastActiveOrg", "anthropic-device-id", "activitySessionId", "routingHint")

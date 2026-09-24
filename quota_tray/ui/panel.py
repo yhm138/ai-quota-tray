@@ -41,6 +41,8 @@ class Panel:
         self.cb = callbacks
         self.win: tk.Toplevel | None = None
         self.mode = "usage"                 # usage | diagnostics
+        self._diag_box: tk.Text | None = None
+        self._diag_top = "1.0"              # first visible line survives re-renders
         self._results: list[ProviderResult] = []
         self._meta: dict = {}
         self.f_title = tkfont.Font(family="Segoe UI", size=11, weight="bold")
@@ -48,6 +50,7 @@ class Panel:
         self.f_small = tkfont.Font(family="Segoe UI", size=8)
         self.f_pct = tkfont.Font(family="Consolas", size=10, weight="bold")
         self.f_mono = tkfont.Font(family="Consolas", size=8)
+        self.f_body_mono = tkfont.Font(family="Consolas", size=9)
 
     # ------------------------------------------------------------ lifecycle
 
@@ -65,6 +68,8 @@ class Panel:
 
     def show(self, mode: str | None = None) -> None:
         if mode:
+            if mode != self.mode:
+                self._diag_top = "1.0"
             self.mode = mode
         if self.win is not None and self.win.winfo_exists():
             self._render()
@@ -119,6 +124,12 @@ class Panel:
         win = self.win
         if win is None or not win.winfo_exists():
             return
+        if self._diag_box is not None:
+            try:
+                self._diag_top = self._diag_box.index("@0,0")
+            except tk.TclError:
+                pass
+            self._diag_box = None
         for child in win.winfo_children():
             child.destroy()
 
@@ -136,6 +147,10 @@ class Panel:
 
         win.update_idletasks()
         self._place(win)
+        if self._diag_box is not None:
+            # Only now is the final size known; restoring earlier drifts.
+            win.update_idletasks()
+            self._diag_box.yview(self._diag_top)
 
     def _header(self, parent) -> None:
         bar = tk.Frame(parent, bg=theme.BG)
@@ -272,10 +287,11 @@ class Panel:
             wrap,
             bg=theme.BG_CARD,
             fg=theme.FG_DIM,
-            font=self.f_mono,
+            font=self.f_body_mono,
             relief="flat",
-            height=20,
-            width=54,
+            highlightthickness=0,
+            height=24,
+            width=76,
             wrap="word",
             padx=10,
             pady=8,
@@ -300,7 +316,13 @@ class Panel:
             text = f"could not build the diagnostics report: {exc}"
         box.insert("end", text)
         box.configure(state="disabled")
-        box.bind("<MouseWheel>", lambda e: box.yview_scroll(int(-e.delta / 120), "units"))
+        # "break": Text has its own wheel binding, and running both doubled
+        # every scroll step.
+        box.bind(
+            "<MouseWheel>",
+            lambda e: (box.yview_scroll(int(-e.delta / 120) * 3, "units"), "break")[1],
+        )
+        self._diag_box = box
 
     def _footer(self, parent) -> None:
         bar = tk.Frame(parent, bg=theme.BG)
@@ -333,6 +355,8 @@ class Panel:
         button("Refresh", self.cb["refresh"], primary=True)
         if self.mode == "diagnostics":
             button("Back", lambda: self.show("usage"))
+            if "open_diagnostics" in self.cb:
+                button("Open as text", self.cb["open_diagnostics"])
         else:
             button("Diagnostics", lambda: self.show("diagnostics"))
         button("Config", self.cb["open_config"])

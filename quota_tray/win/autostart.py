@@ -33,13 +33,15 @@ def _python_exe() -> Path:
 
 def launch_command() -> str:
     """How this copy of the program should be started, quoted for the registry."""
+    # --autostart: started at login, so stay quietly in the tray instead of
+    # popping the panel open the way a manual launch does.
     if getattr(sys, "frozen", False):
-        return f'"{Path(sys.executable).resolve()}"'
+        return f'"{Path(sys.executable).resolve()}" --autostart'
     root = Path(__file__).resolve().parent.parent.parent
     entry = root / "run.pyw"
     if not entry.exists():                     # fallback: module form
-        return f'"{_python_exe()}" -m quota_tray'
-    return f'"{_python_exe()}" "{entry}"'
+        return f'"{_python_exe()}" -m quota_tray --autostart'
+    return f'"{_python_exe()}" "{entry}" --autostart'
 
 
 def registered_command() -> str | None:

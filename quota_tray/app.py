@@ -17,6 +17,8 @@ from .config import (
     LOG_PATH,
     acquire_single_instance,
     install_dir,
+    listen_for_show,
+    signal_running_instance,
     load_cache,
     save_cache,
     setup_logging,
@@ -68,6 +70,7 @@ class QuotaTrayApp:
                 "quit": self.quit,
                 "open_config": lambda: autostart.open_folder(CONFIG_PATH()),
                 "diagnostics_text": self.diagnostics_text,
+                "open_diagnostics": self._open_diagnostics,
             },
         )
         self.icon = self._build_icon()
@@ -300,11 +303,20 @@ class QuotaTrayApp:
     # ------------------------------------------------------------ diagnostics
 
     def diagnostics_text(self) -> str:
-        lines = [
-            f"{APP_NAME} v{__version__}",
-            f"Python {sys.version.split()[0]} on {sys.platform}",
-            "",
-        ]
+        lines = [f"{APP_NAME} v{__version__}", ""]
+        # What is wrong, in plain words, before the details.
+        lines.append("SUMMARY")
+        if not self.results:
+            lines.append("  (still collecting, try again in a moment)")
+        for r in self.results:
+            if r.ok:
+                lines.append(f"  {r.name}: OK via {r.source or '?'}")
+                continue
+            lines.append(f"  {r.name}: NOT WORKING")
+            for attempt in r.attempts:
+                if not attempt.ok:
+                    lines.append(f"    - {attempt.name}: {attempt.detail[:220]}")
+        lines += ["", "DETAILS", f"Python {sys.version.split()[0]} on {sys.platform}"]
         lines.append(f"Config file: {CONFIG_PATH()}")
         lines.append(f"Log file:    {LOG_PATH()}")
         lines.append(f"Run at login: {'enabled' if autostart.is_enabled() else 'disabled'}")
@@ -330,6 +342,10 @@ class QuotaTrayApp:
             lines.append("")
         return "\n".join(lines)
 
+    def _open_diagnostics(self) -> None:
+        self._write_diag_file()
+        autostart.open_folder(DIAG_PATH())
+
     def _write_diag_file(self) -> None:
         try:
             DIAG_PATH().write_text(self.diagnostics_text(), encoding="utf-8")
@@ -343,6 +359,9 @@ class QuotaTrayApp:
         threading.Thread(target=self._refresh_loop, name="refresh", daemon=True).start()
         threading.Thread(target=self.icon.run, name="tray", daemon=True).start()
         threading.Thread(target=self._update_loop, name="update", daemon=True).start()
+        threading.Thread(
+            target=listen_for_show, args=(self._on_show, self._stop), name="show", daemon=True
+        ).start()
         self.root.after(200, self._push_to_panel)
         self.root.mainloop()
 
@@ -510,19 +529,72 @@ def _take_over() -> bool:
     return False
 
 
+def _message_box(text: str, *, error: bool = False) -> None:
+    """A plain Windows message box: visible even when the tray never came up."""
+    if sys.platform != "win32":
+        if sys.stderr is not None:
+            print(text, file=sys.stderr)
+        return
+    try:
+        import ctypes
+
+        flags = 0x10 if error else 0x40            # MB_ICONERROR / MB_ICONINFORMATION
+        ctypes.windll.user32.MessageBoxW(None, text, APP_NAME, flags | 0x40000)  # topmost
+    except Exception:                                           # noqa: BLE001
+        pass
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    try:
+        return _main(argv)
+    except SystemExit:
+        raise
+    except BaseException:                                       # noqa: BLE001
+        # A windowed build has no console: without this a crash is invisible.
+        import traceback
+
+        report = traceback.format_exc()
+        log.critical("QuotaTray crashed:\n%s", report)
+        crash = CONFIG_PATH().with_name("crash.log")
+        try:
+            with crash.open("a", encoding="utf-8") as fh:
+                fh.write(f"--- {datetime.now().isoformat()} v{__version__}\n{report}\n")
+        except OSError:
+            pass
+        _message_box(
+            f"QuotaTray v{__version__} could not start.\n\n{report.strip().splitlines()[-1]}\n\n"
+            f"Details: {crash}",
+            error=True,
+        )
+        return 1
+
+
+def _main(argv: list[str]) -> int:
     if "--update" in argv:
         return run_update()
     if "--once" in argv or "--diagnose" in argv:
         return run_console(diagnose="--diagnose" in argv)
     if "--panel-demo" in argv:
         return run_panel_demo()
+    if "--selftest" in argv:
+        return run_selftest()
 
     setup_logging(verbose="--verbose" in argv)
+    manual = "--autostart" not in argv
+    log.info("launch: v%s from %s, args %s", __version__, install_dir(), argv or "none")
     if not acquire_single_instance():
         if "--no-takeover" in argv or not _take_over():
-            log.info("another instance is already running, exiting")
+            if signal_running_instance():
+                log.info("already running: asked that copy to open its panel")
+            else:
+                log.info("already running (an older copy that cannot be signalled)")
+                if manual:
+                    _message_box(
+                        "QuotaTray is already running.\n\n"
+                        "Look for its icon in the taskbar tray; on Windows 11 new "
+                        "icons start hidden under the ^ arrow."
+                    )
             return 0
     log.info("%s v%s starting from %s", APP_NAME, __version__, install_dir())
     app = QuotaTrayApp()
@@ -537,5 +609,20 @@ def main(argv: list[str] | None = None) -> int:
             # the copy that is running now takes it over.
             log.info("run-at-login pointed at %s, moving it here", autostart.registered_command())
             autostart.enable()
+    if manual:
+        # Started by hand: show something, since Windows 11 hides new tray icons.
+        app.root.after(1500, app._on_show)
     app.start()
     return 0
+
+
+def run_selftest() -> int:
+    """`--selftest`: import everything the frozen build needs; exit 1 if not."""
+    failures = []
+    for mod in ("pystray", "PIL", "requests", "cryptography", "curl_cffi.requests", "tkinter"):
+        try:
+            __import__(mod)
+        except Exception as exc:                                # noqa: BLE001
+            failures.append(f"{mod}: {exc!r}")
+    _emit(failures or ["selftest OK"])
+    return 1 if failures else 0

@@ -155,6 +155,20 @@ def save_cache(payload: dict) -> None:
 # --------------------------------------------------------------- logging
 
 
+class _SafeRotatingFileHandler(RotatingFileHandler):
+    """Rotation needs a rename, which Windows refuses while another process
+    (a second QuotaTray, an editor) has the file open. The stock handler then
+    drops every record for good; keep appending to the big file instead."""
+
+    def doRollover(self) -> None:
+        try:
+            super().doRollover()
+        except OSError:
+            self.maxBytes = 0                    # stop retrying in this process
+            if self.stream is None:
+                self.stream = self._open()
+
+
 def setup_logging(verbose: bool = False) -> None:
     root = logging.getLogger()
     if root.handlers:
@@ -162,7 +176,9 @@ def setup_logging(verbose: bool = False) -> None:
     root.setLevel(logging.DEBUG if verbose else logging.INFO)
     fmt = logging.Formatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s")
     try:
-        fh = RotatingFileHandler(LOG_PATH(), maxBytes=512_000, backupCount=2, encoding="utf-8")
+        fh = _SafeRotatingFileHandler(
+            LOG_PATH(), maxBytes=512_000, backupCount=2, encoding="utf-8", delay=True
+        )
         fh.setFormatter(fmt)
         root.addHandler(fh)
     except Exception:                                           # noqa: BLE001
@@ -177,6 +193,7 @@ def setup_logging(verbose: bool = False) -> None:
 
 
 _MUTEX_HANDLE = None
+_SHOW_EVENT = f"Local\\{APP_NAME}-show"
 
 
 def acquire_single_instance() -> bool:
@@ -200,3 +217,42 @@ def acquire_single_instance() -> bool:
         return False
     _MUTEX_HANDLE = handle
     return True
+
+
+def signal_running_instance() -> bool:
+    """Ask the QuotaTray that is already running to open its panel."""
+    if sys.platform != "win32":
+        return False
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenEventW.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR]
+    kernel32.OpenEventW.restype = wintypes.HANDLE
+    EVENT_MODIFY_STATE = 0x0002
+    handle = kernel32.OpenEventW(EVENT_MODIFY_STATE, False, _SHOW_EVENT)
+    if not handle:
+        return False                              # an older version that doesn't listen
+    try:
+        return bool(kernel32.SetEvent(handle))
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def listen_for_show(callback, stop) -> None:
+    """Block (in a thread) calling callback() whenever another launch signals us."""
+    if sys.platform != "win32":
+        return
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateEventW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.BOOL, wintypes.LPCWSTR]
+    kernel32.CreateEventW.restype = wintypes.HANDLE
+    kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    handle = kernel32.CreateEventW(None, False, False, _SHOW_EVENT)   # auto-reset
+    if not handle:
+        return
+    while not stop.is_set():
+        if kernel32.WaitForSingleObject(handle, 1000) == 0:           # WAIT_OBJECT_0
+            callback()

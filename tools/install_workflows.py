@@ -65,6 +65,7 @@ jobs:
           --icon assets/quotatray.ico
           --hidden-import pystray._win32
           --hidden-import PIL._tkinter_finder
+          --collect-all curl_cffi
           --distpath dist/onefile
           run.pyw
 
@@ -75,6 +76,7 @@ jobs:
           --icon assets/quotatray.ico
           --hidden-import pystray._win32
           --hidden-import PIL._tkinter_finder
+          --collect-all curl_cffi
           --distpath dist/onedir
           run.pyw
 
@@ -93,6 +95,12 @@ jobs:
           foreach ($exe in $targets) {
             $p = Start-Process -FilePath $exe -ArgumentList "--diagnose" -Wait -PassThru
             if ($p.ExitCode -ne 0) { throw "$exe exited with $($p.ExitCode)" }
+            # Every bundled dependency (curl_cffi's native libcurl above all) must load.
+            $p = Start-Process -FilePath $exe -ArgumentList "--selftest" -Wait -PassThru
+            if ($p.ExitCode -ne 0) {
+              Get-Content "$env:APPDATA\QuotaTray\diagnostics.txt" -ErrorAction SilentlyContinue
+              throw "$exe --selftest exited with $($p.ExitCode)"
+            }
             Write-Host "$exe ran cleanly"
           }
 

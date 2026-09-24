@@ -14,6 +14,7 @@ if not exist ".venv\Scripts\python.exe" (
     --icon assets\quotatray.ico ^
     --hidden-import pystray._win32 ^
     --hidden-import PIL._tkinter_finder ^
+    --collect-all curl_cffi ^
     run.pyw
 echo.
 echo Done: dist\QuotaTray.exe
