@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.2.1
+
+- **Codex resets are always accounted for.** The card now always has a
+  *Resets* line: the count and first expiry, *none available*, or *unknown*
+  with the reason (for example `HTTP 403`), also listed in Diagnostics under
+  *Codex account details*. Before, any failure hid the line silently
+- The reset list is read the way the official Codex client reads it: only
+  credits whose `status` is `available` count, and each shows its title
+  (e.g. "Full reset (Weekly + 5 hr)"). The request uses the same headers as
+  the usage call, retrying with the community workaround's headers
+- A failed account-details fetch is retried after 5 minutes instead of
+  being cached for an hour
+
 ## v1.2.0
 
 - **Plan, subscription and credits** under each provider's bars:
