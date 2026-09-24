@@ -192,6 +192,10 @@ def _build_windows(payload: dict, scale_mode: str, *, base_time=None) -> list[Qu
         scale = 1.0
     elif scale_mode == "fraction":
         scale = 100.0
+    elif all(isinstance(node.get("utilization"), (int, float)) for _, node in nodes):
+        # Both the OAuth and claude.ai endpoints report `utilization` as 0-100.
+        # Guessing from magnitude would turn 1% (early in a window) into 100%.
+        scale = 1.0
     else:
         scale = decide_percent_scale(raw_values)
 
@@ -238,10 +242,10 @@ class ClaudeProvider(Provider):
     name = "Claude"
 
     def detect(self) -> bool:
-        for env in ("APPDATA", "LOCALAPPDATA"):
-            base = os.environ.get(env)
-            if base and (Path(base) / "Claude").is_dir():
-                return True
+        from ..win.chromium_cookies import app_roots
+
+        if app_roots("Claude"):
+            return True
         if (Path.home() / ".claude").is_dir():
             return True
         return bool(discover_oauth_token(self.settings)[0])
@@ -313,65 +317,83 @@ class ClaudeProvider(Provider):
 
     def _try_cookie(self, result: ProviderResult, session_key: str | None, tag: str) -> bool:
         notes: list[str] = []
+        jar: dict[str, str] = {}
         if not session_key:
             if sys.platform != "win32":
                 result.attempts.append(
                     SourceAttempt(tag, False, "reading desktop cookies is Windows-only")
                 )
                 return False
-            from ..win.chromium_cookies import get_cookie
+            from ..win.chromium_cookies import get_cookies
 
-            session_key, notes = get_cookie("Claude", "%claude.ai", "sessionKey")
+            jar, notes = get_cookies("Claude", "%claude.ai", "sessionKey")
+            session_key = jar.get("sessionKey")
         if not session_key:
             result.attempts.append(
-                SourceAttempt(tag, False, "; ".join(notes[-2:]) or "no sessionKey found")
+                SourceAttempt(tag, False, "; ".join(notes[-3:]) or "no sessionKey found")
             )
             return False
 
+        # Forward the identity cookies the web client sends alongside the
+        # session. Cloudflare's cf_* cookies are bound to Claude Desktop's own
+        # user agent, so replaying them with ours would do more harm than good.
+        cookie = {"sessionKey": session_key}
+        for name in _FORWARD_COOKIES:
+            if jar.get(name) and _cookie_safe(jar[name]):
+                cookie[name] = jar[name]
         headers = {
-            "Cookie": f"sessionKey={session_key}",
+            "Cookie": "; ".join(f"{k}={v}" for k, v in cookie.items()),
             "User-Agent": BROWSER_UA,
             "Accept": "application/json",
             "Referer": "https://claude.ai/",
             "anthropic-client-platform": "web_claude_ai",
         }
+        org_id, account, plan = None, None, None
+        org_error = ""
         try:
             orgs_resp = session().get(
                 "https://claude.ai/api/organizations", headers=headers, timeout=20
             )
         except Exception as exc:                                # noqa: BLE001
-            result.attempts.append(SourceAttempt(tag, False, f"claude.ai request failed: {exc}"))
-            return False
-        if orgs_resp.status_code >= 400:
+            orgs_resp, org_error = None, f"claude.ai request failed: {exc}"
+        if orgs_resp is not None:
+            if orgs_resp.status_code >= 400:
+                org_error = _http_problem(orgs_resp)
+            else:
+                try:
+                    org_id, account, plan = _pick_org(
+                        orgs_resp.json(), prefer=cookie.get("lastActiveOrg")
+                    )
+                except ValueError:
+                    org_error = "org list was not JSON (likely a Cloudflare challenge)"
+        # The org list can be blocked while the usage endpoint is not; the
+        # desktop app remembers the org it last used in a cookie.
+        org_id = org_id or cookie.get("lastActiveOrg")
+        if not org_id:
             result.attempts.append(
-                SourceAttempt(tag, False, f"claude.ai returned HTTP {orgs_resp.status_code} (cookie may be stale)")
+                SourceAttempt(tag, False, org_error or "could not determine the organization id")
             )
             return False
-        try:
-            orgs = orgs_resp.json()
-        except ValueError:
-            result.attempts.append(SourceAttempt(tag, False, "org list was not JSON (likely blocked)"))
-            return False
 
-        org_id, account, plan = _pick_org(orgs)
-        if not org_id:
-            result.attempts.append(SourceAttempt(tag, False, "could not determine the organization id"))
-            return False
-
+        problems: list[str] = []
         for url in (
             f"https://claude.ai/api/organizations/{org_id}/usage",
             f"https://claude.ai/api/organizations/{org_id}/rate_limits",
             "https://claude.ai/api/bootstrap",
         ):
+            name = url.rsplit("/", 1)[-1]
             try:
                 resp = session().get(url, headers=headers, timeout=20)
-            except Exception:                                   # noqa: BLE001
+            except Exception as exc:                            # noqa: BLE001
+                problems.append(f"{name}: {exc}")
                 continue
             if resp.status_code >= 400:
+                problems.append(f"{name}: {_http_problem(resp)}")
                 continue
             try:
                 payload = resp.json()
             except ValueError:
+                problems.append(f"{name}: not JSON")
                 continue
             windows = _build_windows(payload, self.settings.get("percent_scale", "auto"))
             if windows:
@@ -379,11 +401,15 @@ class ClaudeProvider(Provider):
                 result.ok = True
                 result.source = f"Claude Desktop cookie ({url.rsplit('/', 1)[-1]})"
                 result.account = account
-                result.plan = plan
+                result.plan = plan or _guess_plan(payload)
                 result.status = "connected"
                 result.attempts.append(SourceAttempt(tag, True, url))
                 return True
-        result.attempts.append(SourceAttempt(tag, False, "no quota fields in the claude.ai endpoints"))
+            problems.append(f"{name}: no quota fields")
+        detail = "; ".join(problems[:2]) or "no quota fields in the claude.ai endpoints"
+        if org_error:
+            detail = f"{org_error}; {detail}"
+        result.attempts.append(SourceAttempt(tag, False, detail))
         return False
 
     def collect(self, result: ProviderResult) -> None:
@@ -403,20 +429,40 @@ class ClaudeProvider(Provider):
             result.status = "no usable quota source - see Diagnostics"
 
 
-def _pick_org(orgs) -> tuple[str | None, str | None, str | None]:
+_FORWARD_COOKIES = ("lastActiveOrg", "anthropic-device-id", "activitySessionId", "routingHint")
+
+
+def _cookie_safe(value: str) -> bool:
+    return all(0x21 <= ord(c) < 0x7F and c not in ';,"\\' for c in value)
+
+
+def _http_problem(resp) -> str:
+    body = (getattr(resp, "text", "") or "")[:2000].lower()
+    if resp.status_code in (403, 503) and ("cloudflare" in body or "just a moment" in body
+                                           or "cf-chl" in body):
+        return f"HTTP {resp.status_code}: blocked by Cloudflare (open Claude Desktop, then retry)"
+    if resp.status_code in (401, 403):
+        return f"HTTP {resp.status_code}: session cookie rejected (sign in to Claude Desktop again)"
+    return f"HTTP {resp.status_code}"
+
+
+def _pick_org(orgs, prefer: str | None = None) -> tuple[str | None, str | None, str | None]:
     if isinstance(orgs, dict):
         orgs = orgs.get("organizations") or [orgs]
     if not isinstance(orgs, list):
         return None, None, None
-    best = None
+    preferred = chat = first = None
     for org in orgs:
         if not isinstance(org, dict):
             continue
-        caps = org.get("capabilities") or []
-        if any("chat" in str(c) for c in caps):
-            best = org
+        if prefer and prefer in (org.get("uuid"), org.get("id")):
+            preferred = org
             break
-        best = best or org
+        caps = org.get("capabilities") or []
+        if chat is None and any("chat" in str(c) for c in caps):
+            chat = org
+        first = first or org
+    best = preferred or chat or first
     if not best:
         return None, None, None
     plan = None

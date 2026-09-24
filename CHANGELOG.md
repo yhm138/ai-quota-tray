@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- **Claude Desktop**: find the Microsoft Store (MSIX) install's data directory
+- **Claude Desktop**: read the cookie DB while the app has it open, instead of
+  failing on the sharing violation
+- **Claude Desktop**: strip the cookie domain hash based on the DB schema
+  version rather than guessing from the bytes, and open the copied DB by plain
+  path so Windows paths no longer break the SQLite URI
+- **Claude Desktop**: use the `lastActiveOrg` cookie to pick the organization,
+  and still reach the usage endpoint when the organization list is blocked;
+  failures now say whether Cloudflare or a stale session was the cause
+- **Claude**: `utilization` is always read as 0-100, so 1% usage early in a
+  window is no longer shown as 100%
+
 ## v1.0.0
 
 First public release.

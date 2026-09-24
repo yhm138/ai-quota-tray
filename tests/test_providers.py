@@ -50,12 +50,12 @@ def fake_session(get=None, post=None):
 
 print("\n--- Claude ---")
 payload = {
-    "five_hour": {"utilization": 0.42, "resets_at": "2026-09-13T18:00:00Z"},
-    "seven_day": {"utilization": 0.785, "resets_at": "2026-09-16T00:00:00Z"},
-    "seven_day_opus": {"utilization": 0.93, "resets_at": "2026-09-16T00:00:00Z"},
+    "five_hour": {"utilization": 42.0, "resets_at": "2026-09-13T18:00:00Z"},
+    "seven_day": {"utilization": 78.5, "resets_at": "2026-09-16T00:00:00Z"},
+    "seven_day_opus": {"utilization": 93.0, "resets_at": "2026-09-16T00:00:00Z"},
     "seven_day_sonnet": None,
     "extra_usage": {"is_enabled": True, "monthly_limit": 100, "used_credits": 12,
-                    "utilization": 0.12},
+                    "utilization": 12.0},
     "account": {"email_address": "me@example.com"},
 }
 claude.discover_oauth_token = lambda s: ("tok", "/fake/.credentials.json", "max", [])
@@ -81,8 +81,14 @@ claude.session = lambda: fake_session(
 r = p.fetch()
 check("0-100 scale handled", next(w for w in r.windows if w.key == "five_hour").percent_text == "63%")
 
+# early in a window every value is <= 1; that is still a percentage, not a fraction
+low = claude._build_windows({"five_hour": {"utilization": 1.0}, "seven_day": {"utilization": 0.0}},
+                            "auto")
+check("low utilization stays 1%", next(w for w in low if w.key == "five_hour").percent_text == "1%",
+      [w.percent_text for w in low])
+
 orgs = [{"uuid": "org-1", "name": "Personal", "capabilities": ["chat", "claude_max"]}]
-usage = {"five_hour": {"utilization": 0.55, "resets_at": "2026-09-13T20:00:00Z"}}
+usage = {"five_hour": {"utilization": 55.0, "resets_at": "2026-09-13T20:00:00Z"}}
 
 
 def cookie_get(url, **kwargs):
@@ -102,6 +108,55 @@ r = p2.fetch()
 check("cookie fallback succeeds", r.ok, r.status)
 check("cookie path resolves org", r.plan == "max" and r.account == "Personal", (r.plan, r.account))
 check("cookie path is 55%", r.windows[0].percent_text == "55%")
+
+check("lastActiveOrg wins over the first chat org",
+      claude._pick_org(orgs + [{"uuid": "org-2", "name": "Team", "capabilities": ["chat"]}],
+                       prefer="org-2")[0] == "org-2")
+check("chat org beats an earlier api-only org",
+      claude._pick_org([{"uuid": "api", "capabilities": ["api"]}] + orgs)[0] == "org-1")
+
+# desktop jar: org list blocked by Cloudflare, lastActiveOrg cookie still gets us there
+seen_cookies = []
+
+
+def blocked_orgs_get(url, **kwargs):
+    seen_cookies.append(kwargs["headers"]["Cookie"])
+    if url.endswith("/organizations"):
+        resp = FakeResp({}, 403)
+        resp.text = "<html><title>Just a moment...</title>cloudflare</html>"
+        return resp
+    if url == "https://claude.ai/api/organizations/org-9/usage":
+        return FakeResp(usage)
+    return FakeResp({}, 404)
+
+
+claude.session = lambda: fake_session(get=blocked_orgs_get)
+fake_cookies = types.ModuleType("quota_tray.win.chromium_cookies")
+fake_cookies.get_cookies = lambda *a: (
+    {"sessionKey": "sk-ant-sid01-x", "lastActiveOrg": "org-9", "cf_clearance": "zzz"}, [])
+real_cookies = sys.modules.get("quota_tray.win.chromium_cookies")
+real_platform = sys.platform
+sys.modules["quota_tray.win.chromium_cookies"] = fake_cookies
+sys.platform = "win32"
+try:
+    p3 = claude.ClaudeProvider(Config({"providers": {"claude": {"order": ["desktop_cookie"]}}}))
+    p3.detect = lambda: True
+    r = p3.fetch()
+finally:
+    sys.platform = real_platform
+    if real_cookies is not None:
+        sys.modules["quota_tray.win.chromium_cookies"] = real_cookies
+    else:
+        del sys.modules["quota_tray.win.chromium_cookies"]
+check("desktop cookie survives blocked org list", r.ok, r.attempts[-1].detail)
+check("lastActiveOrg forwarded, cf_clearance not",
+      "lastActiveOrg=org-9" in seen_cookies[0] and "cf_clearance" not in seen_cookies[0],
+      seen_cookies[:1])
+
+claude.session = lambda: fake_session(get=blocked_orgs_get)
+r = claude.ClaudeProvider(Config({"providers": {"claude": {
+    "order": ["manual_cookie"], "session_key": "sk-fake"}}})).fetch()
+check("cloudflare block is named", "Cloudflare" in r.attempts[-1].detail, r.attempts[-1].detail)
 
 # ------------------------------------------------------------------ Codex
 
@@ -215,6 +270,55 @@ ap2 = antigravity.AntigravityProvider(Config())
 ap2.detect = lambda: True
 r = ap2.fetch()
 check("IDE-not-running degrades", (not r.ok) and "not running" in r.status, r.status)
+
+# ------------------------------------------------------------------ cookie store
+
+print("\n--- Electron cookie store ---")
+import sqlite3                                                   # noqa: E402
+
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM   # noqa: E402
+
+from quota_tray.win import chromium_cookies as cc               # noqa: E402
+
+key = bytes(range(32))
+nonce = b"\x01" * 12
+host_hash = bytes([0x7F] + [0x41] * 31)         # happens to look printable-ish
+enc = b"v10" + nonce + AESGCM(key).encrypt(nonce, host_hash + b"sk-ant-sid01-abc", None)
+check("domain hash stripped when schema says so",
+      cc.decrypt_value(enc, key, has_domain_hash=True) == "sk-ant-sid01-abc")
+enc_old = b"v10" + nonce + AESGCM(key).encrypt(nonce, b"sk-ant-sid01-abc", None)
+check("old schema left intact", cc.decrypt_value(enc_old, key, has_domain_hash=False)
+      == "sk-ant-sid01-abc")
+
+msix = Path(tempfile.mkdtemp())
+root = msix / "Packages" / "Claude_pzs8sxrjxfjjc" / "LocalCache" / "Roaming" / "Claude"
+(root / "Network").mkdir(parents=True)
+db = root / "Network" / "Cookies"
+conn = sqlite3.connect(db)
+conn.execute("CREATE TABLE meta (key TEXT, value TEXT)")
+conn.execute("INSERT INTO meta VALUES ('version', '24')")
+conn.execute("CREATE TABLE cookies (host_key TEXT, name TEXT, value TEXT, "
+             "encrypted_value BLOB, expires_utc INTEGER)")
+conn.execute("INSERT INTO cookies VALUES ('.claude.ai', 'sessionKey', '', ?, 1)",
+             (b"v10" + nonce + AESGCM(key).encrypt(nonce, b"\x00" * 32 + b"sk-ant-1", None),))
+conn.execute("INSERT INTO cookies VALUES ('claude.ai', 'lastActiveOrg', 'org-9', x'', 1)")
+conn.commit()
+conn.close()
+(root / "Partitions" / "webview" / "Network").mkdir(parents=True)
+
+real_env = dict(cc.os.environ)
+cc.os.environ["LOCALAPPDATA"] = str(msix)
+cc.os.environ.pop("APPDATA", None)
+try:
+    roots = cc.app_roots("Claude")
+finally:
+    cc.os.environ.clear()
+    cc.os.environ.update(real_env)
+check("MSIX data dir discovered", root in roots, roots)
+check("cookie DB found", cc.find_cookie_dbs(root) == [db], cc.find_cookie_dbs(root))
+jar = cc.read_cookies(db, "%claude.ai", key)
+check("sessionKey read and hash stripped", jar.get("sessionKey") == "sk-ant-1", jar)
+check("plain cookies read too", jar.get("lastActiveOrg") == "org-9", jar)
 
 # ------------------------------------------------------------------ misc
 
