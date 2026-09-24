@@ -156,8 +156,10 @@ check("lastActiveOrg forwarded, cf_clearance not",
       seen_cookies[:1])
 
 claude.session = lambda: fake_session(get=blocked_orgs_get)
-r = claude.ClaudeProvider(Config({"providers": {"claude": {
-    "order": ["manual_cookie"], "session_key": "sk-fake"}}})).fetch()
+p4 = claude.ClaudeProvider(Config({"providers": {"claude": {
+    "order": ["manual_cookie"], "session_key": "sk-fake"}}}))
+p4.detect = lambda: True          # CI runners have no Claude install
+r = p4.fetch()
 check("cloudflare block is named", "Cloudflare" in r.attempts[-1].detail, r.attempts[-1].detail)
 check("panel status names the real problem", "Cloudflare" in r.status, r.status)
 
