@@ -208,7 +208,9 @@ def acquire_single_instance() -> bool:
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     kernel32.CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
     kernel32.CreateMutexW.restype = wintypes.HANDLE
-    handle = kernel32.CreateMutexW(None, False, f"Global\\{APP_NAME}-singleton")
+    # A new name on purpose: v1.0.x - v1.1.2 used "Global\\QuotaTray-singleton",
+    # and a hung old copy holding it must not keep this version from starting.
+    handle = kernel32.CreateMutexW(None, False, f"Local\\{APP_NAME}-singleton-2")
     if not handle:
         return True
     if ctypes.get_last_error() == ERROR_ALREADY_EXISTS:

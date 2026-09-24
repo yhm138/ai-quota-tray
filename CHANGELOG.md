@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.1.3
+
+- **A stuck old copy no longer blocks startup.** An old v1.0.0 process that
+  had lost its tray icon kept holding the single-instance lock, `taskkill`
+  hung on it, and every new launch gave up. This version uses a new lock that
+  old copies cannot hold, and stops old copies in the background with
+  `TerminateProcess`, logging exactly why if Windows refuses
+- If the tray icon's loop ever dies, QuotaTray now logs it and exits instead
+  of lingering invisibly while holding the lock
+
 ## v1.1.2
 
 - **Nothing happened on launch, and nothing was logged**: once the log
