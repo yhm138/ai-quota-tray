@@ -10,9 +10,10 @@ from __future__ import annotations
 import logging
 import os
 import re
+import sys
 from pathlib import Path
 
-from .proc import powershell_json, run
+from .proc import powershell_json
 
 log = logging.getLogger(__name__)
 
@@ -64,8 +65,31 @@ def other_copies(own_dir: Path) -> list[tuple[int, Path]]:
     return parse_processes(rows, own_dir, {os.getpid(), os.getppid()})
 
 
-def stop(pid: int) -> bool:
-    code, _out, err = run(["taskkill", "/PID", str(pid), "/T", "/F"], timeout=10)
-    if code != 0:
-        log.warning("could not stop pid %s: %s", pid, err.strip()[:200])
-    return code == 0
+def stop(pid: int) -> tuple[bool, str]:
+    """Terminate a process directly. taskkill was seen hanging for 10 s+ on
+    a stuck old copy; TerminateProcess either works or says why at once."""
+    if sys.platform != "win32":
+        return False, "not Windows"
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    PROCESS_TERMINATE, SYNCHRONIZE = 0x0001, 0x00100000
+    handle = kernel32.OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, False, pid)
+    if not handle:
+        code = ctypes.get_last_error()
+        if code == 87:                                   # ERROR_INVALID_PARAMETER
+            return True, "already gone"
+        return False, f"OpenProcess failed (error {code}{', access denied' if code == 5 else ''})"
+    try:
+        if not kernel32.TerminateProcess(handle, 1):
+            return False, f"TerminateProcess failed (error {ctypes.get_last_error()})"
+        if kernel32.WaitForSingleObject(handle, 5000) != 0:
+            return False, "terminated but still exiting after 5 s"
+        return True, "stopped"
+    finally:
+        kernel32.CloseHandle(handle)

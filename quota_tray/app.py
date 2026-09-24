@@ -357,13 +357,24 @@ class QuotaTrayApp:
     def start(self) -> None:
         self.root.after(120, self._pump)
         threading.Thread(target=self._refresh_loop, name="refresh", daemon=True).start()
-        threading.Thread(target=self.icon.run, name="tray", daemon=True).start()
+        threading.Thread(target=self._run_tray, name="tray", daemon=True).start()
         threading.Thread(target=self._update_loop, name="update", daemon=True).start()
         threading.Thread(
             target=listen_for_show, args=(self._on_show, self._stop), name="show", daemon=True
         ).start()
         self.root.after(200, self._push_to_panel)
         self.root.mainloop()
+
+    def _run_tray(self) -> None:
+        # If the tray loop dies, the process must not linger icon-less while
+        # holding the single-instance lock: log it and exit the whole app.
+        try:
+            self.icon.run()
+        except Exception:                                       # noqa: BLE001
+            log.exception("the tray icon stopped unexpectedly")
+        if not self._stop.is_set():
+            log.error("tray icon is gone; quitting so a new launch can start cleanly")
+            self.quit()
 
     def quit(self, *_args) -> None:
         self._stop.set()
@@ -508,20 +519,27 @@ def run_update() -> int:
     return 0
 
 
-def _take_over() -> bool:
-    """Another QuotaTray holds the lock. If it runs from a different folder,
-    the user just started this copy on purpose: stop that one and take over."""
-    import time
-
+def _retire_other_copies() -> int:
+    """Stop QuotaTray copies that run from another folder (an old install).
+    Returns how many were stopped. Never blocks for long."""
     from .win import instances
 
-    others = instances.other_copies(install_dir())
-    if not others:
+    stopped = 0
+    for pid, folder in instances.other_copies(install_dir()):
+        ok, how = instances.stop(pid)
+        log.info("old copy in %s (pid %s): %s", folder, pid, how)
+        stopped += ok
+    return stopped
+
+
+def _take_over() -> bool:
+    """A v1.1.3+ copy holds the lock. If it runs from a different folder,
+    the user just started this one on purpose: stop that one and take over."""
+    import time
+
+    if not _retire_other_copies():
         return False
-    for pid, folder in others:
-        log.info("stopping the QuotaTray running from %s (pid %s)", folder, pid)
-        instances.stop(pid)
-    for _ in range(20):
+    for _ in range(10):
         if acquire_single_instance():
             return True
         time.sleep(0.5)
@@ -597,6 +615,10 @@ def _main(argv: list[str]) -> int:
                     )
             return 0
     log.info("%s v%s starting from %s", APP_NAME, __version__, install_dir())
+    # Old installs (v1.1.2 and earlier) used another lock, so they cannot stop
+    # this copy from starting; clear them out in the background anyway so
+    # there is one icon and one poller.
+    threading.Thread(target=_retire_other_copies, name="retire", daemon=True).start()
     app = QuotaTrayApp()
     if "--no-autostart" not in argv:
         if not app.config.get("autostart_initialized"):
