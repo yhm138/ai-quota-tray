@@ -195,6 +195,8 @@ def acquire_single_instance() -> bool:
     if not handle:
         return True
     if ctypes.get_last_error() == ERROR_ALREADY_EXISTS:
+        # Drop our handle, or it keeps the mutex alive after the owner exits.
+        kernel32.CloseHandle(handle)
         return False
     _MUTEX_HANDLE = handle
     return True

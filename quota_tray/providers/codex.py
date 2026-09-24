@@ -223,22 +223,52 @@ def _find_rate_limits(obj) -> dict | None:
     return None
 
 
-def iter_lines_reverse(path: Path, max_bytes: int = 4_000_000) -> Iterator[str]:
-    """Yield lines from the end of a file, reading at most max_bytes."""
+def iter_lines_reverse(
+    path: Path,
+    max_bytes: int = 4_000_000,
+    max_line: int = 512_000,
+    chunk: int = 256 * 1024,
+) -> Iterator[str]:
+    """Yield lines from the end of a file, reading at most max_bytes.
+
+    Reads backwards in small blocks so memory stays bounded, and skips lines
+    longer than max_line: Codex logs can hold multi-megabyte lines (pasted
+    images, tool output), while the rate-limit records we want are tiny.
+    """
     try:
         size = path.stat().st_size
     except OSError:
         return
-    start = max(0, size - max_bytes)
+    floor = max(0, size - max_bytes)
     try:
-        with path.open("rb") as fh:
-            fh.seek(start)
-            data = fh.read()
+        fh = path.open("rb")
     except OSError:
         return
-    for line in reversed(data.split(b"\n")):
-        if line.strip():
-            yield line.decode("utf-8", "replace")
+    with fh:
+        pos = size
+        tail = b""          # start of the line that continues into later blocks
+        skipping = False    # the line being assembled is over max_line: drop it
+        while pos > floor:
+            step = min(chunk, pos - floor)
+            pos -= step
+            try:
+                fh.seek(pos)
+                block = fh.read(step)
+            except (OSError, MemoryError):
+                return
+            parts = (block + tail).split(b"\n")
+            tail = parts.pop(0)
+            if parts and skipping:
+                parts.pop()             # the rest of the oversized line
+                skipping = False
+            for line in reversed(parts):
+                if line.strip() and len(line) <= max_line:
+                    yield line.decode("utf-8", "replace")
+            if len(tail) > max_line:
+                tail, skipping = b"", True
+        # Only a line that starts at the beginning of the file is complete.
+        if pos == 0 and tail.strip() and not skipping:
+            yield tail.decode("utf-8", "replace")
 
 
 class CodexProvider(Provider):
@@ -473,7 +503,13 @@ class CodexProvider(Provider):
             if not fn:
                 continue
             probe = ProviderResult(provider_id=self.id, name=self.name, fetched_at=now_utc())
-            ok = fn(probe)
+            # One broken source must not throw away what the others found.
+            try:
+                ok = fn(probe)
+            except Exception as exc:                            # noqa: BLE001
+                log.warning("codex source %s failed: %r", name, exc)
+                probe.attempts.append(SourceAttempt(name, False, f"crashed: {exc!r}"))
+                ok = False
             result.attempts.extend(probe.attempts)
             if not ok:
                 continue
@@ -604,8 +640,17 @@ def _scan_sqlite_for_rate_limits(db: Path):
             shutil.copy2(db, tmp)
         except OSError:
             return None
+        # Recent writes live in the -wal file; without it a copy of a busy DB
+        # can look corrupt ("database disk image is malformed").
+        for suffix in ("-wal", "-journal"):
+            side = db.with_name(db.name + suffix)
+            if side.exists():
+                try:
+                    shutil.copy2(side, tmp.with_name(tmp.name + suffix))
+                except OSError:
+                    pass
         try:
-            conn = sqlite3.connect(f"file:{tmp}?mode=ro", uri=True, timeout=5)
+            conn = sqlite3.connect(str(tmp), timeout=5)
         except sqlite3.Error:
             return None
         try:
@@ -635,6 +680,9 @@ def _scan_sqlite_for_rate_limits(db: Path):
                             continue
                         if node:
                             return node, parse_time(db.stat().st_mtime)
+        except sqlite3.Error as exc:
+            log.info("skipping unreadable database %s: %s", db.name, exc)
+            return None
         finally:
             conn.close()
         return None

@@ -343,6 +343,58 @@ providers_base.session = lambda: fake_session(get=lambda url, **k: FakeResp({}, 
 check("check tolerates no releases", updater.check("o/r") is None)
 providers_base.session = real_session
 
+# ------------------------------------------------------------------ robustness
+
+print("\n--- robustness ---")
+big = Path(tempfile.mkdtemp()) / "rollout-big.jsonl"
+with big.open("wb") as fh:
+    fh.write(b'{"first": 1}\n')
+    fh.write(b'{"rate_limits": {"primary": {"used_percent": 5}}}\n')
+    fh.write(b'{"image": "' + b"A" * 3_000_000 + b'"}\n')      # a huge pasted image
+    fh.write(b'{"rate_limits": {"primary": {"used_percent": 7}}}\n')
+got = list(codex.iter_lines_reverse(big, max_bytes=10_000_000, chunk=64 * 1024))
+check("reverse reader skips huge lines",
+      [json.loads(x).get("rate_limits", {}).get("primary", {}).get("used_percent") for x in got]
+      == [7, 5, None], [x[:40] for x in got])
+check("reverse reader keeps the first line", got[-1] == '{"first": 1}', got[-1:])
+small = list(codex.iter_lines_reverse(big, max_bytes=200))
+check("reverse reader drops a cut-off line", len(small) == 1 and "7" in small[0], small)
+
+bad_db = Path(tempfile.mkdtemp()) / "state.sqlite"
+bad_db.write_bytes(b"SQLite format 3\x00" + b"\xff" * 5000)
+check("malformed sqlite is skipped", codex._scan_sqlite_for_rate_limits(bad_db) is None)
+
+
+def boom(_probe):
+    raise MemoryError()
+
+
+cp4 = codex.CodexProvider(Config({"providers": {"codex": {"order": ["wham", "jsonl"]}}}))
+cp4.detect = lambda: True
+codex.session = lambda: fake_session(get=lambda *a, **k: FakeResp(wham))
+cp4._auth_tokens = lambda: ({"access_token": "t"}, "/fake/auth.json")
+cp4._try_jsonl = boom
+r = cp4.fetch()
+check("a crashing source keeps earlier windows", r.ok and len(r.windows) == 2, r.attempts)
+
+from quota_tray.win import instances                              # noqa: E402
+
+own = Path(tempfile.mkdtemp())
+old_src = Path(tempfile.mkdtemp())
+(old_src / "quota_tray").mkdir()
+unrelated = Path(tempfile.mkdtemp())
+rows = [
+    {"ProcessId": 10, "Name": "pythonw.exe",
+     "CommandLine": f'"{old_src}/.venv/Scripts/pythonw.exe" "{old_src}/run.pyw"'},
+    {"ProcessId": 11, "Name": "QuotaTray.exe", "ExecutablePath": str(own / "QuotaTray.exe")},
+    {"ProcessId": 12, "Name": "pythonw.exe", "CommandLine": f'pythonw "{unrelated}/run.pyw"'},
+    {"ProcessId": 13, "Name": "QuotaTray.exe", "ExecutablePath": "/elsewhere/QuotaTray.exe"},
+    {"ProcessId": 99, "Name": "QuotaTray.exe", "ExecutablePath": "/elsewhere/QuotaTray.exe"},
+]
+found = instances.parse_processes(rows, own, {99})
+check("other installs found, ours and strangers left alone",
+      sorted(pid for pid, _ in found) == [10, 13], found)
+
 # ------------------------------------------------------------------ misc
 
 print("\n--- misc ---")

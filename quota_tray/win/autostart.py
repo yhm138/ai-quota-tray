@@ -42,6 +42,20 @@ def launch_command() -> str:
     return f'"{_python_exe()}" "{entry}"'
 
 
+def registered_command() -> str | None:
+    """The command currently stored in the Run key, if any."""
+    if sys.platform != "win32":
+        return None
+    import winreg
+
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as key:
+            value, _ = winreg.QueryValueEx(key, APP_NAME)
+            return str(value) if value else None
+    except OSError:
+        return None
+
+
 def is_enabled() -> bool:
     if sys.platform != "win32":
         return False

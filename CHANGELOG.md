@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.1.1
+
+- Starting QuotaTray from a new folder (say a downloaded `QuotaTray.exe` next
+  to an old source install) now stops the old copy and takes over, instead of
+  exiting with "another instance is already running". Run-at-login moves to
+  the copy that is running
+- **Codex**: session logs are read backwards in small blocks and multi-MB
+  lines are skipped, fixing a `MemoryError`
+- **Codex**: the local database is copied together with its `-wal` file, and
+  a damaged one is skipped instead of raising "database disk image is
+  malformed"
+- **Codex**: one failing source no longer discards windows other sources
+  already found
+
 ## v1.1.0
 
 - **Updates**: QuotaTray checks for a new release once a day and shows
