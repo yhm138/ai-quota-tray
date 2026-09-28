@@ -423,6 +423,36 @@ providers_base.session = lambda: fake_session(
 check("check is quiet when current", updater.check("o/r") is None)
 providers_base.session = lambda: fake_session(get=lambda url, **k: FakeResp({}, 404))
 check("check tolerates no releases", updater.check("o/r") is None)
+
+
+class Redirect:
+    def __init__(self, status, location=""):
+        self.status_code = status
+        self.headers = {"Location": location} if location else {}
+
+
+def upd_get(api, web):
+    def get(url, **_k):
+        return api() if "api.github.com" in url else web()
+    return get
+
+
+providers_base.session = lambda: fake_session(get=upd_get(
+    lambda: FakeResp({"message": "API rate limit exceeded"}, 403),
+    lambda: Redirect(302, "https://github.com/o/r/releases/tag/v99.1.0")))
+rel, err = updater.fetch_latest("o/r")
+check("update check falls back to the release page", rel and rel.tag == "v99.1.0" and err is None,
+      (rel, err))
+
+
+def boom_net():
+    raise ConnectionError("proxy refused")
+
+
+providers_base.session = lambda: fake_session(get=upd_get(boom_net, lambda: Redirect(404)))
+rel, err = updater.fetch_latest("o/r")
+check("update check explains a failure", rel is None and "proxy refused" in err
+      and "github.com: HTTP 404" in err, err)
 providers_base.session = real_session
 
 # ------------------------------------------------------------------ robustness

@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.2.3
+
+- **Check for updates now visibly answers.** It opens the panel with
+  *Checking for updates...*, then either *vX is available* with an
+  **Update now** button, *You are on the latest version*, or the reason the
+  check failed. Before, the answer went only to a Windows notification,
+  which Windows 11 often does not show, so the menu item looked dead
+- The check falls back to the release page on github.com when the GitHub
+  API refuses (it allows 60 anonymous requests an hour) or is unreachable
+- *Update now* shows progress and, if the updater cannot start, the error
+  with a *Retry* button
+
 ## v1.2.2
 
 - **Fixed: after a few days every request failed** with `Could not find a

@@ -45,30 +45,60 @@ def is_newer(tag: str, current: str = __version__) -> bool:
     return bool(new) and bool(cur) and new > cur
 
 
-def latest_release(repo: str = DEFAULT_REPO) -> Release | None:
-    """The newest published release, or None when it can't be determined."""
+def fetch_latest(repo: str = DEFAULT_REPO) -> tuple[Release | None, str | None]:
+    """(newest release, None) or (None, why it could not be determined).
+
+    Asks the GitHub API first; when that fails (it allows 60 anonymous calls
+    an hour, and some networks block it) the release page's redirect to
+    /releases/tag/<tag> on github.com gives the same answer.
+    """
     from .providers.base import session
 
+    problems = []
     try:
         resp = session().get(
             f"https://api.github.com/repos/{repo}/releases/latest",
             headers={"Accept": "application/vnd.github+json", "User-Agent": "QuotaTray-updater"},
             timeout=15,
         )
-    except Exception:                                           # noqa: BLE001
-        log.info("update check failed", exc_info=True)
-        return None
-    if resp.status_code != 200:
-        log.info("update check: HTTP %s", resp.status_code)
-        return None
+        if resp.status_code == 200:
+            data = resp.json()
+            tag = data.get("tag_name") if isinstance(data, dict) else None
+            if isinstance(tag, str) and tag:
+                return Release(tag, data.get("html_url") or f"https://github.com/{repo}/releases"), None
+            problems.append("GitHub API: no tag in the reply")
+        else:
+            problems.append(f"GitHub API: HTTP {resp.status_code}")
+    except Exception as exc:                                    # noqa: BLE001
+        problems.append(f"GitHub API: {_short(exc)}")
+
     try:
-        data = resp.json()
-    except ValueError:
-        return None
-    tag = data.get("tag_name")
-    if not isinstance(tag, str) or not tag:
-        return None
-    return Release(tag=tag, url=data.get("html_url") or f"https://github.com/{repo}/releases")
+        resp = session().get(
+            f"https://github.com/{repo}/releases/latest",
+            headers={"User-Agent": "QuotaTray-updater"},
+            allow_redirects=False,
+            timeout=15,
+        )
+        where = resp.headers.get("Location", "") if resp.status_code in (301, 302, 303, 307, 308) else ""
+        m = re.search(r"/releases/tag/([^/?#]+)", where)
+        if m:
+            return Release(m.group(1), where), None
+        problems.append(f"github.com: HTTP {resp.status_code}")
+    except Exception as exc:                                    # noqa: BLE001
+        problems.append(f"github.com: {_short(exc)}")
+
+    log.info("update check failed: %s", "; ".join(problems))
+    return None, "; ".join(problems)
+
+
+def _short(exc: Exception) -> str:
+    text = str(exc) or exc.__class__.__name__
+    return text if len(text) <= 120 else text[:117] + "..."
+
+
+def latest_release(repo: str = DEFAULT_REPO) -> Release | None:
+    """The newest published release, or None when it can't be determined."""
+    return fetch_latest(repo)[0]
 
 
 def check(repo: str = DEFAULT_REPO) -> Release | None:

@@ -42,6 +42,9 @@ class Panel:
         self.win: tk.Toplevel | None = None
         self.mode = "usage"                 # usage | diagnostics
         self._diag_box: tk.Text | None = None
+        # A message shown under the header, e.g. the update check's result:
+        # (text, tone, button label, button callback).
+        self._notice: tuple | None = None
         self._diag_top = "1.0"              # first visible line survives re-renders
         self._results: list[ProviderResult] = []
         self._meta: dict = {}
@@ -57,6 +60,12 @@ class Panel:
     def set_data(self, results: list[ProviderResult], meta: dict) -> None:
         self._results = results
         self._meta = meta
+        if self.win is not None and self.win.winfo_exists():
+            self._render()
+
+    def set_notice(self, text: str | None, tone: str = "", action_text: str | None = None,
+                   action=None) -> None:
+        self._notice = (text, tone, action_text, action) if text else None
         if self.win is not None and self.win.winfo_exists():
             self._render()
 
@@ -137,6 +146,8 @@ class Panel:
         outer.pack(padx=1, pady=1, fill="both", expand=True)
 
         self._header(outer)
+        if self._notice and self.mode == "usage":
+            self._notice_bar(outer)
         body = tk.Frame(outer, bg=theme.BG)
         body.pack(fill="both", expand=True, padx=PAD, pady=(4, 0))
         if self.mode == "diagnostics":
@@ -162,6 +173,25 @@ class Panel:
         tk.Label(bar, text=sub, bg=theme.BG, fg=theme.FG_FAINT, font=self.f_small).pack(
             side="right", pady=(4, 0)
         )
+
+    def _notice_bar(self, parent) -> None:
+        text, tone, action_text, action = self._notice
+        color = {"good": theme.OK, "warn": theme.WARN}.get(tone, theme.FG_DIM)
+        bar = tk.Frame(parent, bg=theme.BG_ROW)
+        bar.pack(fill="x", padx=PAD, pady=(6, 0))
+        tk.Label(
+            bar, text=text, bg=theme.BG_ROW, fg=color, font=self.f_body,
+            wraplength=WIDTH - (150 if action_text else 60), justify="left", anchor="w",
+        ).pack(side="left", fill="x", expand=True, padx=10, pady=8)
+        close = tk.Label(bar, text="x", bg=theme.BG_ROW, fg=theme.FG_FAINT, font=self.f_small,
+                         cursor="hand2", padx=8)
+        close.pack(side="right")
+        close.bind("<Button-1>", lambda _e: self.set_notice(None))
+        if action_text and action:
+            btn = tk.Label(bar, text=action_text, bg=theme.ACCENT, fg="#FFFFFF",
+                           font=self.f_small, padx=10, pady=5, cursor="hand2")
+            btn.pack(side="right", pady=6)
+            btn.bind("<Button-1>", lambda _e: action())
 
     def _usage(self, parent) -> None:
         if not self._results:
