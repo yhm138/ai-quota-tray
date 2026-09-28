@@ -16,8 +16,13 @@ _SESSION: requests.Session | None = None
 def session() -> requests.Session:
     global _SESSION
     if _SESSION is None:
+        from ..tls import ca_bundle
+
         s = requests.Session()
         s.trust_env = True
+        # A stable copy: the one-file build's own cacert.pem can be deleted
+        # by Windows temp cleanup while the app runs.
+        s.verify = ca_bundle() or True
         _SESSION = s
     return _SESSION
 

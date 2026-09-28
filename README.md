@@ -252,6 +252,7 @@ and *Open as text* opens the whole report in Notepad.
 | Antigravity "IDE not running" | Open the IDE, then *Refresh now* in the tray menu |
 | Claude Code can't reach your proxy | Edit `PROXY_PORT` at the top of `claude_login.bat`, run it, then `/login` |
 | No tray icon | Start `QuotaTray.exe` by hand: it opens its panel. Windows 11 hides new tray icons under the `^` arrow; drag it out. If it cannot start you get a message and `%APPDATA%\QuotaTray\crash.log` |
+| `Could not find a suitable TLS CA certificate bundle ... _MEI...` | Windows temp cleanup deleted files the one-file exe unpacked. Fixed in v1.2.2 (it keeps its own copy and restarts itself); the portable zip never unpacks to temp at all |
 | No plan / resets lines | They come from the account APIs; check the log. Codex needs the ChatGPT usage API source to work |
 | Panel missing / tkinter error | Python was installed without tcl/tk — reinstall it |
 | A percentage looks wrong | Set that provider's `percent_scale` from `auto` to `percent` |
@@ -459,6 +460,7 @@ Antigravity 内部跑一个语言服务器，启动参数里带 `--csrf_token`�
 | Antigravity 显示 "IDE not running" | 打开 IDE，然后在托盘菜单点 *Refresh now* |
 | Claude Code 连不上你的代理端口 | 改 `claude_login.bat` 开头的 `PROXY_PORT`，运行它，再 `/login` |
 | 托盘没图标 | 手动运行 `QuotaTray.exe`，会直接弹出面板。Windows 11 默认把新图标藏在 `^` 里，拖出来即可。启动失败会弹窗并写 `%APPDATA%\QuotaTray\crash.log` |
+| `Could not find a suitable TLS CA certificate bundle ... _MEI...` | Windows 清理临时文件时删掉了单文件 exe 解压出的文件。v1.2.2 已修复（自带证书副本并自动重启）；便携版 zip 不解压到临时目录，不受影响 |
 | 面板不显示 / 报 tkinter | Python 安装时没勾 tcl/tk，重装 Python |
 | 某个百分比明显不对 | 把该 provider 的 `percent_scale` 从 `auto` 改成 `percent` |
 

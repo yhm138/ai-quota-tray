@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.2.2
+
+- **Fixed: after a few days every request failed** with `Could not find a
+  suitable TLS CA certificate bundle ... _MEI...\certifi\cacert.pem`, so
+  Claude showed nothing and Codex fell back to slower sources. The one-file
+  exe unpacks to `%TEMP%\_MEI...`, and Windows temp cleanup deletes files
+  there that are not held open. QuotaTray now copies the certificate list to
+  `%APPDATA%\QuotaTray\cacert.pem` at start and uses that copy, and if its
+  unpacked files disappear anyway it restarts itself to restore them
+
 ## v1.2.1
 
 - **Codex resets are always accounted for.** The card now always has a
