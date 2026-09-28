@@ -231,7 +231,7 @@ class QuotaTrayApp:
         return str(self.config.get("update_repo") or updater.DEFAULT_REPO)
 
     def _check_update(self, *, manual: bool) -> None:
-        latest = updater.latest_release(self._update_repo())
+        latest, error = updater.fetch_latest(self._update_repo())
         found = latest if latest and updater.is_newer(latest.tag) else None
         if found:
             self.update = found
@@ -240,14 +240,32 @@ class QuotaTrayApp:
         except Exception:                                       # noqa: BLE001
             pass
         self._post(self._push_to_panel)
-        if found and (manual or self._notified_tag != found.tag):
-            self._notified_tag = found.tag
-            self._notify(f"{APP_NAME} {found.tag} is available. "
-                         "Right-click the tray icon and choose \"Update\".")
-        elif manual and latest is None:
-            self._notify("Could not reach GitHub to check for updates. See the log file.")
+        log.info("update check: %s", found.tag if found else (error or "up to date"))
+
+        # The panel, not a toast, carries the answer: Windows 11 often
+        # swallows tray notifications, which made the menu item look dead.
+        if found:
+            self._post(lambda: self.panel.set_notice(
+                f"{APP_NAME} {found.tag} is available (you have v{__version__}).",
+                "good", "Update now", self._on_apply_update))
+            if manual:
+                self._post(lambda: self.panel.show("usage"))
+            elif self._notified_tag != found.tag:
+                self._notified_tag = found.tag
+                self._notify(f"{APP_NAME} {found.tag} is available. "
+                             "Right-click the tray icon and choose \"Update\".")
+        elif manual and error:
+            self._post(lambda: self.panel.set_notice(
+                f"Could not check for updates: {error}", "warn"))
         elif manual:
-            self._notify(f"{APP_NAME} v{__version__} is the latest version.")
+            self._post(lambda: self.panel.set_notice(
+                f"You are on the latest version (v{__version__}).", "good"))
+            self._post(lambda: self.root.after(8000, self._clear_up_to_date_notice))
+
+    def _clear_up_to_date_notice(self) -> None:
+        notice = self.panel._notice
+        if notice and notice[0].startswith("You are on the latest version"):
+            self.panel.set_notice(None)
 
     def _notify(self, text: str) -> None:
         try:
@@ -269,20 +287,34 @@ class QuotaTrayApp:
                 return
 
     def _on_check_update(self, *_args) -> None:
+        def begin():
+            self.panel.set_notice("Checking for updates...")
+            self.panel.show("usage")
+
+        self._post(begin)
         threading.Thread(
             target=lambda: self._check_update(manual=True), name="update-check", daemon=True
         ).start()
 
     def _on_apply_update(self, *_args) -> None:
-        if not self.update:
+        release = self.update
+        if not release:
             return
-        try:
-            updater.launch(self.update, self._update_repo())
-        except Exception as exc:                                # noqa: BLE001
-            log.exception("could not start the updater")
-            self._notify(f"Update failed to start: {exc}")
-            return
-        self.quit()
+        self._post(lambda: self.panel.set_notice(
+            f"Downloading {release.tag}... QuotaTray will close and restart by itself."))
+
+        def run():
+            try:
+                updater.launch(release, self._update_repo())
+            except Exception as exc:                            # noqa: BLE001
+                log.exception("could not start the updater")
+                why = str(exc) or exc.__class__.__name__
+                self._post(lambda: self.panel.set_notice(
+                    f"The update could not start: {why}", "warn", "Retry", self._on_apply_update))
+                return
+            self._post(lambda: self.root.after(1500, self.quit))
+
+        threading.Thread(target=run, name="update-apply", daemon=True).start()
 
     # ------------------------------------------------------------ refresh
 
@@ -358,7 +390,7 @@ class QuotaTrayApp:
             "danger": self.config.get("danger_percent", 90),
             "subtitle": f"updated {humanize_age(self.last_refresh)}" if self.last_refresh else "",
             "footer": f"v{__version__} - every {self.config.refresh_seconds // 60} min"
-            + (f" - {self.update.tag} available (tray menu > Update)" if self.update else ""),
+            + (f" - {self.update.tag} available" if self.update else ""),
         }
 
     # ------------------------------------------------------------ diagnostics
