@@ -65,6 +65,26 @@ def other_copies(own_dir: Path) -> list[tuple[int, Path]]:
     return parse_processes(rows, own_dir, {os.getpid(), os.getppid()})
 
 
+def wait_for_exit(pid: int, timeout_s: float = 30.0) -> None:
+    """Block until a process has exited (or the timeout passes)."""
+    if sys.platform != "win32":
+        return
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    handle = kernel32.OpenProcess(0x00100000, False, pid)          # SYNCHRONIZE
+    if not handle:
+        return                                                  # already gone
+    try:
+        kernel32.WaitForSingleObject(handle, int(timeout_s * 1000))
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def stop(pid: int) -> tuple[bool, str]:
     """Terminate a process directly. taskkill was seen hanging for 10 s+ on
     a stuck old copy; TerminateProcess either works or says why at once."""

@@ -709,7 +709,9 @@ def web_session():
         return None
     global _WEB
     if _WEB is None:
-        _WEB = curl_requests.Session(impersonate="chrome")
+        from ..tls import ca_bundle
+
+        _WEB = curl_requests.Session(impersonate="chrome", verify=ca_bundle() or True)
     return _WEB
 
 

@@ -653,6 +653,39 @@ check("reminder waits for the hour", not reminders.due(None, morning, 10))
 check("reminder once a day", reminders.due(None, morning.replace(hour=11), 10)
       and not reminders.due("2026-09-24", morning.replace(hour=11), 10))
 
+# ------------------------------------------------------------------ TLS bundle
+
+print("\n--- TLS bundle ---")
+from quota_tray import tls                                         # noqa: E402
+
+for var in ("REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "SSL_CERT_FILE"):
+    os.environ.pop(var, None)
+stable = tls.ca_bundle()
+check("CA bundle copied out of the package",
+      stable is not None and Path(stable).is_file()
+      and Path(stable).parent == qt_config.app_dir(), stable)
+check("CA bundle copy is complete", Path(stable).stat().st_size
+      == Path(__import__("certifi").where()).stat().st_size)
+custom = Path(tempfile.mkdtemp()) / "corp.pem"
+custom.write_text("x")
+os.environ["REQUESTS_CA_BUNDLE"] = str(custom)
+check("a configured CA bundle wins", tls.ca_bundle() == str(custom))
+os.environ.pop("REQUESTS_CA_BUNDLE")
+
+mei = Path(tempfile.mkdtemp()) / "_MEI12345"
+(mei / "certifi").mkdir(parents=True)
+(mei / "certifi" / "cacert.pem").write_text("x")
+sys.frozen, sys._MEIPASS = True, str(mei)
+try:
+    healthy = tls.bundle_damaged()
+    (mei / "certifi" / "cacert.pem").unlink()        # what Windows temp cleanup does
+    damaged = tls.bundle_damaged()
+finally:
+    del sys.frozen, sys._MEIPASS
+check("intact unpacked folder is fine", healthy is False)
+check("cleaned-up unpacked folder is detected", damaged is True)
+check("source runs are never 'damaged'", tls.bundle_damaged() is False)
+
 # ------------------------------------------------------------------ misc
 
 print("\n--- misc ---")

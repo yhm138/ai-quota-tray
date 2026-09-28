@@ -298,7 +298,32 @@ class QuotaTrayApp:
             self._wake.wait(self.config.refresh_seconds)
             self._wake.clear()
 
+    def _restart_if_bundle_damaged(self) -> bool:
+        """Windows temp cleanup can delete the one-file build's unpacked
+        files while it runs; a fresh start unpacks them again."""
+        from .tls import bundle_damaged
+
+        if not bundle_damaged():
+            return False
+        log.warning("the unpacked program files in %s were removed (Windows temp cleanup?); "
+                    "restarting to restore them", getattr(sys, "_MEIPASS", "?"))
+        try:
+            import subprocess
+
+            subprocess.Popen(
+                [sys.executable, "--autostart", "--wait-pid", str(os.getpid())],
+                creationflags=0x00000008 | 0x00000200,          # DETACHED | NEW_GROUP
+                close_fds=True,
+            )
+        except Exception:                                       # noqa: BLE001
+            log.exception("could not restart")
+            return False
+        self.quit()
+        return True
+
     def refresh_once(self) -> None:
+        if self._restart_if_bundle_damaged():
+            return
         self.refreshing = True
         try:
             with ThreadPoolExecutor(max_workers=max(1, len(self.providers))) as pool:
@@ -473,6 +498,9 @@ def _emit(lines: list[str]) -> None:
 def run_console(diagnose: bool = False) -> int:
     """`--once` / `--diagnose`: skip the tray, report to the console or a file."""
     setup_logging(verbose=True)
+    from .tls import ca_bundle
+
+    ca_bundle()
     config = Config.load()
     providers = build_providers(config)
     with ThreadPoolExecutor(max_workers=max(1, len(providers))) as pool:
@@ -640,6 +668,17 @@ def _main(argv: list[str]) -> int:
         return run_selftest()
 
     setup_logging(verbose="--verbose" in argv)
+    from .tls import ca_bundle
+
+    ca_bundle()                                  # copy it out while it still exists
+    if "--wait-pid" in argv:
+        # A self-restart: let the old copy exit and free the lock first.
+        from .win import instances
+
+        try:
+            instances.wait_for_exit(int(argv[argv.index("--wait-pid") + 1]))
+        except (IndexError, ValueError):
+            pass
     manual = "--autostart" not in argv
     log.info("launch: v%s from %s, args %s", __version__, install_dir(), argv or "none")
     if not acquire_single_instance():
