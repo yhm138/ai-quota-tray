@@ -31,6 +31,9 @@ per product. Click it and the panel (screenshot above) shows, per product:
   Codex's windows, and Antigravity's prompt credits and per-model quotas.
 - **Account details**: plan and status (a cancelled Claude plan shows amber),
   when the subscription started or renews, Claude extra usage, Codex credits.
+- **Several accounts**: if Claude Code and Claude Desktop (or Windows and WSL
+  Codex) are signed in to different accounts, the card gets ‹ › buttons,
+  one page per account.
 - **Banked limit resets**: the one-time resets Anthropic and OpenAI hand out,
   how many are unused and when the first one expires. A notification reminds
   you once a day while any are unused.
@@ -314,6 +317,7 @@ MIT — see [LICENSE](LICENSE).
 
 - **所有额度窗口**：用了多少、还有多久重置。Claude 的 5 小时和 7 天窗口以及账号上的其他限额，Codex 的窗口，Antigravity 的 prompt 积分和各模型额度。
 - **账号信息**：套餐与状态（Claude 套餐已取消会显示为黄色）、订阅开始或续费日期、Claude 额外用量、Codex 积分。
+- **多账号**：Claude Code 和 Claude Desktop（或 Windows 与 WSL 里的 Codex）登录的是不同账号时，卡片上会出现 ‹ › 按钮，每个账号一页。
 - **可用的额度重置**：Anthropic 和 OpenAI 发放的一次性重置，还剩几次、最早哪天过期。只要还有没用的，每天会弹一次提醒。
 
 **不需要登录**。它读取你机器上各个工具已经写好的凭据（包括 Claude Desktop 自己的登录），而且每个产品都有**多条兜底路径**，某一条不通时自动换下一条。新版本在托盘菜单里一键安装。

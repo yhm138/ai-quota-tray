@@ -11,6 +11,7 @@ Fallback chain (providers.codex.order):
 """
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import os
@@ -37,7 +38,7 @@ from ..model import (
     parse_time,
 )
 from ..win.proc import popen
-from .account import fmt_date, soon, pretty_plan, to_float
+from .account import fmt_date, group_pages, soon, pretty_plan, to_float
 from .base import Provider, session
 
 log = logging.getLogger(__name__)
@@ -443,6 +444,43 @@ def codex_resets(usage: dict, reset_payload: dict) -> list[ResetGrant]:
 SNAPSHOT_SOURCES = ("jsonl", "sqlite")
 
 
+def codex_homes(settings: dict) -> list[tuple[Path, str]]:
+    """[(CODEX_HOME, label)]: the default home first, then any other home
+    with a login in it (CODEX_HOME, each WSL distro's ~/.codex)."""
+    default = codex_home(settings)
+    homes = [(default, "Codex")]
+    seen = {_norm(default)}
+
+    def add(home: Path, label: str) -> None:
+        try:
+            if _norm(home) in seen or not (home / "auth.json").is_file():
+                return
+        except OSError:
+            return
+        seen.add(_norm(home))
+        homes.append((home, label))
+
+    plain = Path.home() / ".codex"
+    add(plain, "Codex - ~/.codex")
+    if settings.get("scan_wsl", True):
+        from .claude import _wsl_distros
+
+        for distro in _wsl_distros():
+            root = Path(f"\\\\wsl.localhost\\{distro}")
+            add(root / "root" / ".codex", f"Codex - WSL {distro}")
+            try:
+                users = list((root / "home").iterdir())[:10] if (root / "home").is_dir() else []
+            except OSError:
+                users = []
+            for user in users:
+                add(user / ".codex", f"Codex - WSL {distro}")
+    return homes
+
+
+def _norm(path: Path) -> str:
+    return os.path.normcase(str(path)).rstrip("\\/")
+
+
 class CodexProvider(Provider):
     id = "codex"
     name = "Codex"
@@ -698,6 +736,35 @@ class CodexProvider(Provider):
     # ---------------- orchestration
 
     def collect(self, result: ProviderResult) -> None:
+        """One page per Codex login on this machine (the Windows ~/.codex that
+        the Codex app and CLI share, a custom CODEX_HOME, each WSL distro)."""
+        homes = codex_homes(self.settings)
+        pages: list[ProviderResult] = []
+        first: ProviderResult | None = None
+        for i, (home, label) in enumerate(homes):
+            page = ProviderResult(provider_id=self.id, name=self.name,
+                                  fetched_at=result.fetched_at, installed=result.installed)
+            sub = copy.copy(self)
+            sub.settings = {**self.settings, "codex_home": str(home)}
+            # codex app-server always uses its own default home, so it can
+            # only speak for that one.
+            sub._collect_home(page, allow_app_server=(i == 0))
+            page.label = label
+            if len(homes) > 1:
+                for attempt in page.attempts:
+                    attempt.name = f"[{label}] {attempt.name}"
+            result.attempts.extend(page.attempts)
+            first = first or page
+            if page.ok:
+                pages.append(page)
+        if pages:
+            pages = group_pages(pages)
+            result.adopt(pages[0])
+            result.alternates = pages[1:]
+        elif first is not None:
+            result.status = first.status
+
+    def _collect_home(self, result: ProviderResult, *, allow_app_server: bool = True) -> None:
         """Walk the sources and MERGE their windows.
 
         The live wham endpoint sometimes reports only one of the two windows,
@@ -722,7 +789,7 @@ class CodexProvider(Provider):
 
         for name in order:
             fn = steps.get(name)
-            if not fn:
+            if not fn or (name == "app_server" and not allow_app_server):
                 continue
             if live_ok and name in SNAPSHOT_SOURCES:
                 # A live answer is complete for the signed-in account even when

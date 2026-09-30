@@ -48,6 +48,13 @@ def fake_session(get=None, post=None):
 
 # ------------------------------------------------------------------ Claude
 
+
+def set_login(token, origin, plan, notes):
+    """Stub Claude Code login discovery with at most one login."""
+    claude.discover_oauth_tokens = lambda s: ([(token, origin, plan)] if token else [], notes)
+
+
+
 print("\n--- Claude ---")
 payload = {
     "five_hour": {"utilization": 42.0, "resets_at": "2026-09-13T18:00:00Z"},
@@ -60,7 +67,7 @@ payload = {
 }
 # Route claude.ai calls through the fake `session` too, not a real curl_cffi one.
 claude.web_session = lambda: None
-claude.discover_oauth_token = lambda s: ("tok", "/fake/.credentials.json", "max", [])
+set_login("tok", "/fake/.credentials.json", "max", [])
 claude.session = lambda: fake_session(get=lambda *a, **k: FakeResp(payload))
 p = claude.ClaudeProvider(Config())
 p.detect = lambda: True
@@ -101,7 +108,7 @@ def cookie_get(url, **kwargs):
     return FakeResp({}, 404)
 
 
-claude.discover_oauth_token = lambda s: (None, "", None, ["no credentials"])
+set_login(None, "", None, ["no credentials"])
 claude.session = lambda: fake_session(get=cookie_get)
 cfg = Config({"providers": {"claude": {"session_key": "sk-fake"}}})
 p2 = claude.ClaudeProvider(cfg)
@@ -228,7 +235,7 @@ def usage_get(url, headers=None, **_k):
     return FakeResp(payload) if url == claude.OAUTH_USAGE_URL else FakeResp({}, 404)
 
 
-claude.discover_oauth_token = lambda s: (None, "", None, ["token expired"])
+set_login(None, "", None, ["token expired"])
 claude.desktop_oauth_tokens = lambda: ([("live-token", "config.json [oauth:tokenCacheV2]")], [])
 claude.session = lambda: fake_session(get=usage_get)
 old_order = Config({"providers": {"claude": {
@@ -593,7 +600,7 @@ def account_get(url, **_k):
 
 claude.session = lambda: fake_session(get=account_get)
 claude._PROFILES.clear()
-claude.discover_oauth_token = lambda s: ("tok-acct", "/fake/.credentials.json", None, [])
+set_login("tok-acct", "/fake/.credentials.json", None, [])
 p6 = claude.ClaudeProvider(Config({"providers": {"claude": {"order": ["oauth"]}}}))
 p6.detect = lambda: True
 r = p6.fetch()
@@ -701,6 +708,97 @@ morning = datetime(2026, 9, 24, 9, 0)
 check("reminder waits for the hour", not reminders.due(None, morning, 10))
 check("reminder once a day", reminders.due(None, morning.replace(hour=11), 10)
       and not reminders.due("2026-09-24", morning.replace(hour=11), 10))
+
+# ------------------------------------------------------------------ several accounts
+
+print("\n--- several accounts ---")
+
+
+def jwt_with(email):
+    body = __import__("base64").urlsafe_b64encode(json.dumps({"email": email}).encode())
+    return "h." + body.decode().rstrip("=") + ".s"
+
+
+def claude_usage_for(pct):
+    return {"five_hour": {"utilization": pct}, "seven_day": {"utilization": pct / 2}}
+
+
+profiles = {"Bearer cli-tok": "cli@example.com", "Bearer desk-tok": "desk@example.com",
+            "Bearer desk-same": "cli@example.com"}
+usages = {"Bearer cli-tok": 10.0, "Bearer desk-tok": 70.0, "Bearer desk-same": 10.0}
+
+
+def multi_get(url, headers=None, **_k):
+    who = headers.get("Authorization")
+    if url == claude.OAUTH_USAGE_URL:
+        return FakeResp(claude_usage_for(usages[who]))
+    if url == claude.OAUTH_PROFILE_URL:
+        return FakeResp({"account": {"email_address": profiles[who]}, "organization": {}})
+    return FakeResp({}, 404)
+
+
+claude.session = lambda: fake_session(get=multi_get)
+claude._PROFILES.clear()
+claude.discover_oauth_tokens = lambda s: ([("cli-tok", "C:/Users/me/.claude/.credentials.json",
+                                            None)], [])
+claude.desktop_oauth_tokens = lambda: ([("desk-tok", "config.json [oauth:tokenCacheV2]")], [])
+pm = claude.ClaudeProvider(Config())
+pm.detect = lambda: True
+r = pm.fetch()
+check("claude: two accounts, two pages", len(r.pages()) == 2
+      and [p.label for p in r.pages()] == ["Claude Code", "Claude Desktop"]
+      and [p.account for p in r.pages()] == ["cli@example.com", "desk@example.com"],
+      [(p.label, p.account) for p in r.pages()])
+check("claude: each page keeps its own numbers",
+      [p.windows[0].percent for p in r.pages()] == [10.0, 70.0])
+rt = ProviderResult.from_cache(json.loads(json.dumps(r.to_cache())))
+check("account pages survive the cache", len(rt.pages()) == 2
+      and rt.alternates[0].account == "desk@example.com")
+
+claude.desktop_oauth_tokens = lambda: ([("desk-same", "config.json [oauth:tokenCacheV2]")], [])
+r = pm.fetch()
+check("claude: same account on both logins is one page",
+      len(r.pages()) == 1 and r.label == "Claude Code + Claude Desktop", (len(r.pages()), r.label))
+check("claude: WSL login is labelled",
+      claude.login_label("\\\\wsl.localhost\\Arch\\root\\.claude\\.credentials.json")
+      == "Claude Code - WSL Arch")
+
+win_home, wsl_home = Path(tempfile.mkdtemp()), Path(tempfile.mkdtemp())
+for home, tok, mail in ((win_home, "win-tok", "app@example.com"), (wsl_home, "wsl-tok", "wsl@example.com")):
+    (home / "auth.json").write_text(json.dumps({"tokens": {
+        "access_token": tok, "account_id": tok, "id_token": jwt_with(mail)}}))
+codex_pct = {"Bearer win-tok": 12.0, "Bearer wsl-tok": 88.0}
+
+
+def codex_multi_get(url, headers=None, **_k):
+    if url == codex.WHAM_URL:
+        return FakeResp({"plan_type": "plus", "rate_limit": {"secondary_window": {
+            "used_percent": codex_pct[headers["Authorization"]], "limit_window_seconds": 604800}}})
+    return FakeResp({}, 404)
+
+
+codex.session = lambda: fake_session(get=codex_multi_get)
+codex._EXTRAS.clear()
+real_homes = codex.codex_homes
+codex.codex_homes = lambda s: [(win_home, "Codex"), (wsl_home, "Codex - WSL Arch")]
+try:
+    cm = codex.CodexProvider(Config({"providers": {"codex": {"order": ["wham"]}}}))
+    cm.detect = lambda: True
+    r = cm.fetch()
+finally:
+    codex.codex_homes = real_homes
+check("codex: Windows and WSL accounts are two pages",
+      [(p.label, p.account, p.windows[0].percent) for p in r.pages()]
+      == [("Codex", "app@example.com", 12.0), ("Codex - WSL Arch", "wsl@example.com", 88.0)],
+      [(p.label, p.account, [w.percent for w in p.windows]) for p in r.pages()])
+check("codex: diagnostics say which login", any(a.name.startswith("[Codex - WSL Arch]")
+                                                for a in r.attempts), [a.name for a in r.attempts])
+
+r.alternates[0].resets = [__import__("quota_tray.model", fromlist=["ResetGrant"]).ResetGrant(
+    1, now_utc() + timedelta(days=5))]
+text = reminders.unused_resets_text([r])
+check("reminder names the account that has the reset",
+      text and "Codex (wsl@example.com): 1 unused reset" in text, text)
 
 # ------------------------------------------------------------------ TLS bundle
 

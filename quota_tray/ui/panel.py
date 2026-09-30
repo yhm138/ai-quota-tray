@@ -45,6 +45,7 @@ class Panel:
         # A message shown under the header, e.g. the update check's result:
         # (text, tone, button label, button callback).
         self._notice: tuple | None = None
+        self._page: dict[str, int] = {}     # which account page each card shows
         self._diag_top = "1.0"              # first visible line survives re-renders
         self._results: list[ProviderResult] = []
         self._meta: dict = {}
@@ -202,7 +203,15 @@ class Panel:
         for result in self._results:
             self._provider_card(parent, result)
 
+    def _flip(self, provider_id: str, step: int, count: int) -> None:
+        self._page[provider_id] = (self._page.get(provider_id, 0) + step) % count
+        self._render()
+
     def _provider_card(self, parent, result: ProviderResult) -> None:
+        pages = result.pages()
+        index = self._page.get(result.provider_id, 0) % len(pages)
+        product = result
+        result = pages[index]            # the account page being shown
         card = tk.Frame(parent, bg=theme.BG_CARD, highlightthickness=0)
         card.pack(fill="x", pady=6)
         inner = tk.Frame(card, bg=theme.BG_CARD)
@@ -218,11 +227,31 @@ class Panel:
             head, text=" " + result.name, bg=theme.BG_CARD, fg=theme.FG, font=self.f_title
         ).pack(side="left")
 
+        if len(pages) > 1:
+            nav = tk.Frame(head, bg=theme.BG_CARD)
+            nav.pack(side="left", padx=(10, 0), pady=(2, 0))
+            for text, step in (("\u2039", -1), (None, 0), ("\u203a", 1)):
+                if text is None:
+                    tk.Label(nav, text=f"{index + 1}/{len(pages)}", bg=theme.BG_CARD,
+                             fg=theme.FG_FAINT, font=self.f_small).pack(side="left", padx=2)
+                    continue
+                btn = tk.Label(nav, text=text, bg=theme.BG_ROW, fg=theme.FG, font=self.f_body,
+                               padx=6, cursor="hand2")
+                btn.pack(side="left")
+                btn.bind("<Button-1>", lambda _e, st=step, pid=product.provider_id,
+                         n=len(pages): self._flip(pid, st, n))
+
+        if len(pages) > 1 and result.label:
+            tk.Label(
+                inner, text=result.label, bg=theme.BG_CARD, fg=theme.FG_DIM, font=self.f_small,
+                anchor="w",
+            ).pack(anchor="w", pady=(2, 0))
+
         meta_bits = [b for b in (result.plan, result.account) if b]
         if meta_bits:
             tk.Label(
                 head,
-                text=_ellipsis(" - ".join(meta_bits), 34),
+                text=_ellipsis(" - ".join(meta_bits), 24 if len(pages) > 1 else 34),
                 bg=theme.BG_CARD,
                 fg=theme.FG_FAINT,
                 font=self.f_small,

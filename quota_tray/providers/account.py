@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from datetime import datetime
 
-from ..model import InfoRow, ResetGrant, humanize_delta, now_utc
+from ..model import InfoRow, ProviderResult, ResetGrant, humanize_delta, now_utc
 
 
 def fmt_date(dt: datetime | None) -> str:
@@ -89,3 +89,24 @@ def reset_rows(resets: list[ResetGrant], where: str) -> list[InfoRow]:
     if notes:
         rows.append(InfoRow("", "; ".join(sorted(notes)) + f" \u00b7 use in {where}"))
     return rows
+
+
+def same_account(a: ProviderResult, b: ProviderResult) -> bool:
+    """Two logins are one account when their emails match; without emails,
+    identical usage numbers are the best evidence there is."""
+    if a.account and b.account:
+        return a.account.strip().lower() == b.account.strip().lower()
+    return [(w.key, round(w.percent or 0.0, 1)) for w in a.windows] == \
+        [(w.key, round(w.percent or 0.0, 1)) for w in b.windows]
+
+
+def group_pages(pages: list[ProviderResult]) -> list[ProviderResult]:
+    """One page per account; logins of the same account share a page."""
+    out: list[ProviderResult] = []
+    for page in pages:
+        twin = next((p for p in out if same_account(p, page)), None)
+        if twin is None:
+            out.append(page)
+        elif page.label and page.label not in (twin.label or ""):
+            twin.label = f"{twin.label} + {page.label}" if twin.label else page.label
+    return out

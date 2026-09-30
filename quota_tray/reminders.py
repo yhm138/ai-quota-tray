@@ -14,16 +14,21 @@ def due(last_day: str | None, now_local: datetime, hour: int) -> bool:
 
 def unused_resets_text(results: list[ProviderResult]) -> str | None:
     lines = []
-    for r in results:
-        active = r.active_resets()
-        if not active:
-            continue
-        count = sum(g.count for g in active)
-        first = min((g.expires_at for g in active if g.expires_at), default=None)
-        line = f"{r.name}: {count} unused reset{'s' if count != 1 else ''}"
-        if first:
-            line += f", first expires {fmt_expiry(first)}"
-        lines.append(line)
+    for product in results:
+        pages = product.pages()
+        for r in pages:
+            active = r.active_resets()
+            if not active:
+                continue
+            count = sum(g.count for g in active)
+            first = min((g.expires_at for g in active if g.expires_at), default=None)
+            who = r.account or r.label
+            name = f"{product.name} ({who})" if len(pages) > 1 and who else product.name
+            line = f"{name}: {count} unused reset{'s' if count != 1 else ''}"
+            if first:
+                line += f", first expires {fmt_expiry(first)}"
+            lines.append(line)
     if not lines:
         return None
     return "\n".join(lines) + "\nApply them in the app's Settings > Usage before they expire."
+
