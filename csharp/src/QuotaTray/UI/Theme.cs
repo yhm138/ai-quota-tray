@@ -29,6 +29,9 @@ namespace QuotaTray.UI
             { "codex", Hex("#10A37F") },
             { "antigravity", Hex("#4285F4") },
             { "deepseek", Hex("#4D6BFE") },
+            { "doubao", Hex("#3B5CFF") },
+            { "trae", Hex("#E5484D") },
+            { "gemini", Hex("#3186FF") },
         };
 
         public static Color Tint(string id) => ProviderTint.TryGetValue(id ?? "", out var c) ? c : Accent;

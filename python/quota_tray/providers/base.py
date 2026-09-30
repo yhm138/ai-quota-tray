@@ -76,7 +76,10 @@ def build_providers(config: Config) -> list[Provider]:
     from .claude import ClaudeProvider
     from .codex import CodexProvider
     from .deepseek import DeepSeekProvider
+    from .gemini import GeminiProvider
+    from .trae import TraeProvider
+    from .doubao import DoubaoProvider
 
     providers = [ClaudeProvider(config), CodexProvider(config), AntigravityProvider(config),
-                 DeepSeekProvider(config)]
+                 GeminiProvider(config), TraeProvider(config), DoubaoProvider(config), DeepSeekProvider(config)]
     return [p for p in providers if p.enabled]

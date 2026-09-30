@@ -20,6 +20,9 @@ PROVIDER_TINT = {
     "codex": "#10A37F",
     "antigravity": "#4285F4",
     "deepseek": "#4D6BFE",
+    "doubao": "#3B5CFF",
+    "trae": "#E5484D",
+    "gemini": "#3186FF",
 }
 
 

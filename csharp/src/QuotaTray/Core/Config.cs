@@ -98,6 +98,21 @@ namespace QuotaTray.Core
       ""show_models"": true,
       ""max_models"": 6
     },
+    ""gemini"": {
+      ""enabled"": true,
+      ""gemini_home"": """",
+      ""scan_wsl"": true
+    },
+    ""trae"": {
+      ""enabled"": true,
+      ""storage_path"": """",
+      ""cn"": true,
+      ""scan_wsl"": true
+    },
+    ""doubao"": {
+      ""enabled"": true,
+      ""session_id"": """"
+    },
     ""deepseek"": {
       ""enabled"": true,
       ""api_key"": """",
