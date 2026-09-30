@@ -43,8 +43,10 @@ class Panel:
         self.mode = "usage"                 # usage | diagnostics
         self._diag_box: tk.Text | None = None
         # A message shown under the header, e.g. the update check's result:
-        # (text, tone, button label, button callback).
+        # (text, tone, button label, button callback, progress 0..1 or None).
         self._notice: tuple | None = None
+        self._notice_label: tk.Label | None = None
+        self._notice_track: tk.Canvas | None = None
         self._page: dict[str, int] = {}     # which account page each card shows
         self._diag_top = "1.0"              # first visible line survives re-renders
         self._results: list[ProviderResult] = []
@@ -65,10 +67,29 @@ class Panel:
             self._render()
 
     def set_notice(self, text: str | None, tone: str = "", action_text: str | None = None,
-                   action=None) -> None:
-        self._notice = (text, tone, action_text, action) if text else None
+                   action=None, progress: float | None = None) -> None:
+        self._notice = (text, tone, action_text, action, progress) if text else None
         if self.win is not None and self.win.winfo_exists():
             self._render()
+
+    def update_progress(self, text: str, progress: float | None) -> None:
+        """Change a progress notice in place (no full re-render per chunk)."""
+        label, bar = self._notice_label, self._notice_track
+        showing = self.win is not None and self.win.winfo_exists()
+        if (showing and self._notice and self._notice[2] is None and label is not None
+                and label.winfo_exists() and bar is not None and bar.winfo_exists()):
+            self._notice = (text, self._notice[1], None, None, progress)
+            label.configure(text=text)
+            self._draw_progress(bar, progress)
+            return
+        self.set_notice(text, progress=progress if progress is not None else -1.0)
+
+    def _draw_progress(self, canvas: tk.Canvas, progress: float | None) -> None:
+        canvas.delete("all")
+        w = max(canvas.winfo_width(), 10)
+        canvas.create_rectangle(0, 0, w, 4, fill=theme.BG_CARD, outline="")
+        if progress is not None and progress >= 0:
+            canvas.create_rectangle(0, 0, int(w * min(1.0, progress)), 4, fill=theme.ACCENT, outline="")
 
     def toggle(self) -> None:
         if self.win is not None and self.win.winfo_exists():
@@ -176,14 +197,24 @@ class Panel:
         )
 
     def _notice_bar(self, parent) -> None:
-        text, tone, action_text, action = self._notice
+        text, tone, action_text, action, progress = self._notice
         color = {"good": theme.OK, "warn": theme.WARN}.get(tone, theme.FG_DIM)
-        bar = tk.Frame(parent, bg=theme.BG_ROW)
-        bar.pack(fill="x", padx=PAD, pady=(6, 0))
-        tk.Label(
+        outer = tk.Frame(parent, bg=theme.BG_ROW)
+        outer.pack(fill="x", padx=PAD, pady=(6, 0))
+        bar = tk.Frame(outer, bg=theme.BG_ROW)
+        bar.pack(fill="x")
+        self._notice_label = tk.Label(
             bar, text=text, bg=theme.BG_ROW, fg=color, font=self.f_body,
             wraplength=WIDTH - (150 if action_text else 60), justify="left", anchor="w",
-        ).pack(side="left", fill="x", expand=True, padx=10, pady=8)
+        )
+        self._notice_label.pack(side="left", fill="x", expand=True, padx=10, pady=8)
+        self._notice_track = None
+        if progress is not None:
+            track = tk.Canvas(outer, height=4, bg=theme.BG_ROW, highlightthickness=0)
+            track.pack(fill="x", padx=10, pady=(0, 8))
+            track.bind("<Configure>", lambda _e, c=track: self._draw_progress(
+                c, self._notice[4] if self._notice else None))
+            self._notice_track = track
         close = tk.Label(bar, text="x", bg=theme.BG_ROW, fg=theme.FG_FAINT, font=self.f_small,
                          cursor="hand2", padx=8)
         close.pack(side="right")

@@ -17,6 +17,7 @@ param(
     [string]$InstallDir = "",    # empty = find it from run-at-login / running process
     [int]$WaitPid = 0,           # the tray app passes its own PID and exits
     [string]$ReadyFile = "",     # written once the download is verified; the tray app waits for it
+    [string]$ExeName = "",       # file name of the installed exe (kept as is on update)
     [switch]$NoRestart,
     [switch]$DryRun              # resolve and download, change nothing
 )
@@ -48,7 +49,7 @@ function Start-QuotaTray {
         if (-not (Test-Path -LiteralPath $pyw)) { $pyw = "pythonw.exe" }
         Start-Process -FilePath $pyw -ArgumentList ('"' + (Join-Path $dir "run.pyw") + '"') -WorkingDirectory $dir
     } else {
-        $exe = Join-Path $dir "QuotaTray.exe"
+        $exe = Join-Path $dir $info.exe
         if (-not (Test-Path -LiteralPath $exe) -and (Test-Path -LiteralPath "$exe.old")) {
             Move-Item -LiteralPath "$exe.old" -Destination $exe -Force
             Log "restored the previous QuotaTray.exe"
@@ -79,17 +80,21 @@ function Invoke-QuotaTrayUpdate {
         $quoted = [regex]::Matches($runCmd, '"([^"]+)"') | ForEach-Object { $_.Groups[1].Value }
         foreach ($q in $quoted) {
             if ($q -like "*.pyw") { $dir = Split-Path -Parent $q; break }
-            if ((Split-Path -Leaf $q) -ieq "QuotaTray.exe") { $dir = Split-Path -Parent $q; break }
+            if ((Split-Path -Leaf $q) -like "QuotaTray*.exe") { $dir = Split-Path -Parent $q; break }
         }
         if ($dir) { Log "found install via run-at-login: $dir" }
     }
     if (-not $dir) {
         try {
             $procs = Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object {
-                $_.Name -ieq "QuotaTray.exe" -or ($_.CommandLine -and $_.CommandLine -like "*run.pyw*")
+                $_.Name -like "QuotaTray*.exe" -or ($_.CommandLine -and $_.CommandLine -like "*run.pyw*")
             }
             foreach ($p in $procs) {
-                if ($p.Name -ieq "QuotaTray.exe" -and $p.ExecutablePath) { $dir = Split-Path -Parent $p.ExecutablePath; break }
+                if ($p.Name -like "QuotaTray*.exe" -and $p.ExecutablePath) {
+                    $dir = Split-Path -Parent $p.ExecutablePath
+                    if (-not $ExeName) { $ExeName = $p.Name }
+                    break
+                }
                 $m = [regex]::Match($p.CommandLine, '"([^"]*run\.pyw)"')
                 if ($m.Success) { $dir = Split-Path -Parent $m.Groups[1].Value; break }
             }
@@ -101,15 +106,23 @@ function Invoke-QuotaTrayUpdate {
     }
     $dir = (Resolve-Path -LiteralPath $dir).Path
 
+    # The exe may be called QuotaTray.exe or keep its download name
+    # (QuotaTray-v1.3.2-windows-x64.exe); an update keeps whatever it is.
+    if (-not $ExeName -or -not (Test-Path -LiteralPath (Join-Path $dir $ExeName))) {
+        $found = Get-ChildItem -LiteralPath $dir -Filter "QuotaTray*.exe" -File -ErrorAction SilentlyContinue |
+            Sort-Object @{ Expression = { $_.Name -ne "QuotaTray.exe" }; Ascending = $true },
+                        @{ Expression = "LastWriteTime"; Descending = $true } | Select-Object -First 1
+        $ExeName = if ($found) { $found.Name } else { "QuotaTray.exe" }
+    }
     if (Test-Path -LiteralPath (Join-Path $dir "run.pyw")) {
         $kind = "source"
-    } elseif (Test-Path -LiteralPath (Join-Path $dir "QuotaTray.exe")) {
+    } elseif (Test-Path -LiteralPath (Join-Path $dir $ExeName)) {
         if (Test-Path -LiteralPath (Join-Path $dir "_internal")) { $kind = "portable" } else { $kind = "exe" }
     } else {
-        throw "$dir holds neither QuotaTray.exe nor run.pyw."
+        throw "$dir holds neither a QuotaTray*.exe nor run.pyw."
     }
-    Log "install type: $kind"
-    $script:Install = @{ dir = $dir; kind = $kind }
+    Log "install type: $kind ($ExeName)"
+    $script:Install = @{ dir = $dir; kind = $kind; exe = $ExeName }
 
     # ------------------------------------------------------------ pick the release
     # With a tag (always, when the tray app runs this) nothing but plain
@@ -141,11 +154,19 @@ function Invoke-QuotaTrayUpdate {
     $work = Join-Path ([IO.Path]::GetTempPath()) ("QuotaTray-update-" + [Guid]::NewGuid().ToString("N").Substring(0, 8))
     New-Item -ItemType Directory -Force -Path $work | Out-Null
 
-    function Get-Asset([string]$name) {
-        $out = Join-Path $work $name
-        Log "downloading $name"
-        Invoke-WebRequest -Uri "$download/$name" -OutFile $out -Headers $headers -UseBasicParsing
-        return $out
+    function Get-Asset([string[]]$names) {
+        # Newest naming first; releases before v1.3.2 used the plain names.
+        foreach ($name in $names) {
+            $out = Join-Path $work $name
+            try {
+                Invoke-WebRequest -Uri "$download/$name" -OutFile $out -Headers $headers -UseBasicParsing
+                Log "downloaded $name"
+                return $out
+            } catch {
+                $last = $_.Exception.Message
+            }
+        }
+        throw "release $newTag has none of: $($names -join ', ') ($last)"
     }
 
     function Assert-Hash([string]$file, [string]$sums) {
@@ -160,9 +181,11 @@ function Invoke-QuotaTrayUpdate {
 
     $payload = $null
     if ($kind -eq "exe" -or $kind -eq "portable") {
-        $assetName = if ($kind -eq "exe") { "QuotaTray.exe" } else { "QuotaTray-portable.zip" }
-        $payload = Get-Asset $assetName
-        Assert-Hash $payload (Get-Asset "SHA256SUMS.txt")
+        $arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "x64" }
+        $base = "QuotaTray-$newTag-windows-$arch"
+        $names = if ($kind -eq "exe") { @("$base.exe", "QuotaTray.exe") } else { @("$base-portable.zip", "QuotaTray-portable.zip") }
+        $payload = Get-Asset $names
+        Assert-Hash $payload (Get-Asset @("QuotaTray-$newTag-SHA256SUMS.txt", "SHA256SUMS.txt"))
     } else {
         $zip = Join-Path $work "source.zip"
         Log "downloading source for $newTag"
@@ -190,7 +213,7 @@ function Invoke-QuotaTrayUpdate {
     $script:Stopped = $true
     $dirPattern = "*" + $dir.TrimEnd("\") + "*"
     Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
-        ($_.Name -ieq "QuotaTray.exe" -and $_.ExecutablePath -and $_.ExecutablePath -like $dirPattern) -or
+        ($_.Name -like "QuotaTray*.exe" -and $_.ExecutablePath -and $_.ExecutablePath -like $dirPattern) -or
         ($_.CommandLine -and $_.CommandLine -like "*run.pyw*" -and $_.CommandLine -like $dirPattern)
     } | ForEach-Object {
         Log "stopping pid $($_.ProcessId) ($($_.Name))"
@@ -202,7 +225,7 @@ function Invoke-QuotaTrayUpdate {
     $updated = $false
     try {
         if ($kind -eq "exe") {
-            $target = Join-Path $dir "QuotaTray.exe"
+            $target = Join-Path $dir $ExeName
             $backup = "$target.old"
             Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
             for ($i = 0; $i -lt 10; $i++) {

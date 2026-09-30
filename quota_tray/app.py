@@ -55,6 +55,7 @@ class QuotaTrayApp:
         self.last_refresh: datetime | None = None
         self.refreshing = False
         self.update: updater.Release | None = None
+        self._updating = False
         self._notified_tag: str | None = None
         self._stop = threading.Event()
         self._wake = threading.Event()
@@ -297,43 +298,45 @@ class QuotaTrayApp:
         ).start()
 
     def _on_apply_update(self, *_args) -> None:
+        """Check, download, verify and install while this version keeps
+        running and shows each step; only then start the new version and exit."""
+        from . import selfupdate
+
         release = self.update
-        if not release:
+        if not release or self._updating:
             return
-        self._post(lambda: self.panel.set_notice(
-            f"Downloading {release.tag}... QuotaTray will close and restart by itself."))
+        self._updating = True
+        last = [0.0]
 
-        def failed(why: str) -> None:
-            self._post(lambda: self.panel.set_notice(
-                f"Update failed: {why}", "warn", "Retry", self._on_apply_update))
-
-        def run():
+        def progress(step: int, total: int, text: str, fraction) -> None:
             import time
 
-            try:
-                proc, ready = updater.launch(release, self._update_repo())
-            except Exception as exc:                            # noqa: BLE001
-                log.exception("could not start the updater")
-                failed(str(exc) or exc.__class__.__name__)
-                return
-            # Stay up until the new version is downloaded and verified, so a
-            # failed download never leaves the user without the tray app.
-            deadline = time.time() + 600
-            while time.time() < deadline:
-                if ready.exists():
-                    log.info("updater has %s ready; closing so it can be installed", release.tag)
-                    self._post(lambda: self.panel.set_notice(
-                        f"Installing {release.tag}... QuotaTray restarts in a moment."))
-                    self._post(lambda: self.root.after(800, self.quit))
-                    return
-                if proc.poll() is not None:
-                    why = updater.last_log_line()
-                    log.warning("updater exited early: %s", why)
-                    failed(why)
-                    return
-                time.sleep(0.5)
-            failed("the download is taking too long; see update.log")
+            now = time.time()
+            if fraction is not None and 0 < fraction < 1 and now - last[0] < 0.2:
+                return                                   # throttle per-chunk updates
+            last[0] = now
+            # Overall bar: each step is an equal share, the download fills its own.
+            overall = (step - 1 + (fraction if fraction is not None else 0.0)) / total
+            line = f"Updating to {release.tag} - step {step}/{total}: {text}"
+            self._post(lambda: self.panel.update_progress(line, overall))
 
+        def run():
+            try:
+                plan = selfupdate.install(release.tag, self._update_repo(), progress)
+                progress(5, selfupdate.STEPS, plan.note, 1.0)
+                log.info("update to %s installed; starting it", release.tag)
+                plan.launch()
+            except Exception as exc:                            # noqa: BLE001
+                log.exception("update failed")
+                why = str(exc) or exc.__class__.__name__
+                self._updating = False
+                self._post(lambda: self.panel.set_notice(
+                    f"Update failed, still running v{__version__}: {why}",
+                    "warn", "Retry", self._on_apply_update))
+                return
+            self._post(lambda: self.root.after(600, self.quit))
+
+        self._post(lambda: self.panel.show("usage"))
         threading.Thread(target=run, name="update-apply", daemon=True).start()
 
     # ------------------------------------------------------------ refresh
@@ -775,6 +778,16 @@ def _main(argv: list[str]) -> int:
             # the copy that is running now takes it over.
             log.info("run-at-login pointed at %s, moving it here", autostart.registered_command())
             autostart.enable()
+    if "--updated-from" in argv:
+        from .selfupdate import cleanup_after_update
+
+        try:
+            previous = argv[argv.index("--updated-from") + 1]
+        except IndexError:
+            previous = "?"
+        log.info("updated from v%s to v%s", previous, __version__)
+        app.root.after(5000, cleanup_after_update)
+        app.panel.set_notice(f"Updated from v{previous} to v{__version__}.", "good")
     if manual:
         # Started by hand: show something, since Windows 11 hides new tray icons.
         app.root.after(1500, app._on_show)

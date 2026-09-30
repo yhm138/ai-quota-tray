@@ -158,6 +158,9 @@ def launch(release: Release, repo: str = DEFAULT_REPO):
         "-WaitPid", str(os.getpid()),
         "-ReadyFile", str(ready),
     ]
+    if getattr(sys, "frozen", False):
+        # Keep the installed file name (QuotaTray.exe or its download name).
+        args += ["-ExeName", Path(sys.executable).name]
     flags = 0x00000008 | 0x00000200 | 0x08000000   # DETACHED | NEW_GROUP | NO_WINDOW
     log.info("launching updater for %s: %s", release.tag, script)
     proc = subprocess.Popen(args, creationflags=flags, close_fds=True, cwd=str(program_dir()))

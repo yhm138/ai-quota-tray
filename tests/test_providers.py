@@ -528,10 +528,12 @@ rows = [
     {"ProcessId": 12, "Name": "pythonw.exe", "CommandLine": f'pythonw "{unrelated}/run.pyw"'},
     {"ProcessId": 13, "Name": "QuotaTray.exe", "ExecutablePath": "/elsewhere/QuotaTray.exe"},
     {"ProcessId": 99, "Name": "QuotaTray.exe", "ExecutablePath": "/elsewhere/QuotaTray.exe"},
+    {"ProcessId": 14, "Name": "QuotaTray-v1.3.2-windows-x64.exe",
+     "ExecutablePath": "/downloads/QuotaTray-v1.3.2-windows-x64.exe"},
 ]
 found = instances.parse_processes(rows, own, {99})
 check("other installs found, ours and strangers left alone",
-      sorted(pid for pid, _ in found) == [10, 13], found)
+      sorted(pid for pid, _ in found) == [10, 13, 14], found)
 
 import logging                                                   # noqa: E402
 import os                                                        # noqa: E402
@@ -799,6 +801,109 @@ r.alternates[0].resets = [__import__("quota_tray.model", fromlist=["ResetGrant"]
 text = reminders.unused_resets_text([r])
 check("reminder names the account that has the reset",
       text and "Codex (wsl@example.com): 1 unused reset" in text, text)
+
+# ------------------------------------------------------------------ in-app installer
+
+print("\n--- in-app installer ---")
+import hashlib as _hashlib                                          # noqa: E402
+import io as _io                                                    # noqa: E402
+import zipfile as _zipfile                                          # noqa: E402
+
+from quota_tray import selfupdate                                    # noqa: E402
+
+
+class StreamResp:
+    def __init__(self, body: bytes | None):
+        self.status_code = 200 if body is not None else 404
+        self.body = body or b""
+        self.headers = {"Content-Length": str(len(self.body))}
+
+    def iter_content(self, chunk_size=65536):
+        for i in range(0, len(self.body), 7):
+            yield self.body[i:i + 7]
+
+    def close(self):
+        pass
+
+
+def serve(files):
+    """Fake github.com release downloads: {asset name: bytes}."""
+    def get(url, **_k):
+        return StreamResp(files.get(url.rsplit("/", 1)[-1]))
+    return lambda: fake_session(get=get)
+
+
+def sums_for(files):
+    return "".join(f"{_hashlib.sha256(b).hexdigest()}  {n}\n" for n, b in files.items()).encode()
+
+
+def run_install(kind_dir, files, exe_name="QuotaTray.exe"):
+    exe = kind_dir / exe_name
+    steps = []
+    providers_base.session = serve(files)
+    sys.frozen, sys.executable = True, str(exe)
+    try:
+        plan = selfupdate.install("v9.0.0", "o/r", lambda s, n, t, f: steps.append((s, t)))
+        return plan, steps, None
+    except selfupdate.UpdateError as exc:
+        return None, steps, str(exc)
+    finally:
+        del sys.frozen
+        sys.executable = real_executable
+        providers_base.session = real_session
+
+
+real_executable, real_session = sys.executable, providers_base.session
+new_name = f"QuotaTray-v9.0.0-windows-{selfupdate.arch()}.exe"
+
+d = Path(tempfile.mkdtemp())
+(d / "QuotaTray.exe").write_bytes(b"old version")
+files = {new_name: b"NEW VERSION"}
+files["QuotaTray-v9.0.0-SHA256SUMS.txt"] = sums_for(files)
+plan, steps, err = run_install(d, files)
+check("exe update installs while the old one runs", err is None
+      and (d / "QuotaTray.exe").read_bytes() == b"NEW VERSION"
+      and (d / "QuotaTray.exe.old").read_bytes() == b"old version", err)
+check("progress goes through every step", sorted({s for s, _ in steps}) == [1, 2, 3, 4], steps[-3:])
+check("new version waits for the old one", plan and "--wait-pid" in plan.command
+      and plan.command[0] == str(d / "QuotaTray.exe"), plan and plan.command)
+check("no download leftovers", not (d / ".quotatray-update").exists()
+      and not list(d.glob("*.new")) and not list(d.glob("*.part")))
+
+d = Path(tempfile.mkdtemp())
+(d / "QuotaTray.exe").write_bytes(b"old version")
+bad = {new_name: b"TAMPERED", "QuotaTray-v9.0.0-SHA256SUMS.txt": sums_for({new_name: b"real"})}
+plan, steps, err = run_install(d, bad)
+check("checksum mismatch aborts and keeps the running version",
+      err and "checksum" in err and (d / "QuotaTray.exe").read_bytes() == b"old version"
+      and not (d / "QuotaTray.exe.old").exists(), err)
+
+d = Path(tempfile.mkdtemp())
+(d / "QuotaTray-v8-windows-x64.exe").write_bytes(b"old version")
+legacy = {"QuotaTray.exe": b"NEW VERSION"}
+legacy["SHA256SUMS.txt"] = sums_for(legacy)
+plan, steps, err = run_install(d, legacy, "QuotaTray-v8-windows-x64.exe")
+check("old asset names still work, installed name kept", err is None
+      and (d / "QuotaTray-v8-windows-x64.exe").read_bytes() == b"NEW VERSION", err)
+
+d = Path(tempfile.mkdtemp()) / "QuotaTray"
+(d / "_internal").mkdir(parents=True)
+(d / "QuotaTray.exe").write_bytes(b"old version")
+buf = _io.BytesIO()
+with _zipfile.ZipFile(buf, "w") as zf:
+    zf.writestr("QuotaTray.exe", b"NEW VERSION")
+    zf.writestr("_internal/base_library.zip", b"x")
+zname = new_name.replace(".exe", "-portable.zip")
+pfiles = {zname: buf.getvalue()}
+pfiles["QuotaTray-v9.0.0-SHA256SUMS.txt"] = sums_for(pfiles)
+plan, steps, err = run_install(d, pfiles)
+staged = d.with_name("QuotaTray.update")
+check("portable update is staged beside the install", err is None
+      and (staged / "QuotaTray.exe").read_bytes() == b"NEW VERSION"
+      and (d / "QuotaTray.exe").read_bytes() == b"old version", err)
+check("portable swap happens after exit", plan and plan.command[0] == "powershell.exe"
+      and "Wait-Process" in plan.command[-1] and "robocopy" in plan.command[-1], plan and plan.command)
+check("sums parser", selfupdate.parse_sums("ab" * 32 + "  *a b.exe\n") == {"a b.exe": "ab" * 32})
 
 # ------------------------------------------------------------------ TLS bundle
 
