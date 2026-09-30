@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.4.1
+
+- **C# edition: the panel is as large as the Python one.** On a screen
+  scaled to 125% / 150% it was drawn at 100% size, because .NET Framework
+  reports 96 DPI to apps that do not opt in through an app.config. The
+  panel now asks Windows for the DPI of the monitor it opens on (and
+  re-measures when it opens on another one). `"panel_scale"` in
+  config.json makes it bigger or smaller still (e.g. `1.2`)
+- README: the 176 KB C# exe is front and centre
+
 ## v1.4.0
 
 - **New: a C# edition**, `QuotaTray-<version>-csharp-windows-anycpu.exe`:

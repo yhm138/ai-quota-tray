@@ -50,6 +50,7 @@ namespace QuotaTray.UI
                 },
             });
             var _ = _panel.Handle;                 // so BeginInvoke works before the first show
+            _panel.UserScale = (float)_config.Number("panel_scale", 1.0);
 
             var menu = new ContextMenuStrip();
             var show = new ToolStripMenuItem("Show quota panel", null, (s, e) => ShowPanel("usage")) { Font = new Font(menu.Font, FontStyle.Bold) };

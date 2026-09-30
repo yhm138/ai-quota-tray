@@ -69,6 +69,7 @@ namespace QuotaTray.Core
   ""warn_percent"": 75,
   ""danger_percent"": 90,
   ""icon_style"": ""bars"",
+  ""panel_scale"": 1.0,
   ""check_updates"": true,
   ""remind_unused_resets"": true,
   ""reset_reminder_hour"": 10,

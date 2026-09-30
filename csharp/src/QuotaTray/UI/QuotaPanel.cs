@@ -58,6 +58,10 @@ namespace QuotaTray.UI
         private string _mode = "usage";
         private Font _fTitle, _fBody, _fSmall, _fPct, _fMono;
         private float _scale = 1f;
+        private int _dpi;
+
+        /// <summary>Extra size factor from config.json ("panel_scale").</summary>
+        public float UserScale = 1f;
 
         public string Mode => _mode;
         public string NoticeText => _notice?.Text;
@@ -108,9 +112,36 @@ namespace QuotaTray.UI
 
         private int S(float v) => (int)Math.Round(v * _scale);
 
+        [DllImport("user32.dll")]
+        private static extern IntPtr MonitorFromPoint(Point pt, int flags);
+
+        [DllImport("shcore.dll")]
+        private static extern int GetDpiForMonitor(IntPtr monitor, int type, out uint dpiX, out uint dpiY);
+
+        /// <summary>
+        /// The real DPI of the monitor the panel opens on. Form.DeviceDpi
+        /// stays at 96 on .NET Framework unless an app.config opts in, which
+        /// drew the panel at 100% size on a 125% / 150% screen.
+        /// </summary>
+        private static int DpiAt(Point pt)
+        {
+            try
+            {
+                var mon = MonitorFromPoint(pt, 2);                  // MONITOR_DEFAULTTONEAREST
+                if (GetDpiForMonitor(mon, 0, out var x, out _) == 0 && x > 0) return (int)x;   // MDT_EFFECTIVE_DPI
+            }
+            catch (Exception) { }                                    // before Windows 8.1
+            try
+            {
+                using (var g = Graphics.FromHwnd(IntPtr.Zero)) return (int)Math.Round(g.DpiX);
+            }
+            catch (Exception) { return 96; }
+        }
+
         private void MakeFonts()
         {
-            _scale = DeviceDpi / 96f;
+            _dpi = DpiAt(Cursor.Position);
+            _scale = _dpi / 96f * Math.Max(0.5f, Math.Min(3f, UserScale));
             foreach (var f in new[] { _fTitle, _fBody, _fSmall, _fPct, _fMono }) f?.Dispose();
             _fTitle = new Font("Segoe UI", 15 * _scale, FontStyle.Bold, GraphicsUnit.Pixel);
             _fBody = new Font("Segoe UI", 12 * _scale, GraphicsUnit.Pixel);
@@ -123,7 +154,7 @@ namespace QuotaTray.UI
         protected override void OnDpiChanged(DpiChangedEventArgs e)
         {
             base.OnDpiChanged(e);
-            MakeFonts();
+            _dpi = 0;
             Render();
         }
 
@@ -181,6 +212,9 @@ namespace QuotaTray.UI
 
         private void Render()
         {
+            // Opened on another monitor, or the scale setting changed: re-measure.
+            if (_dpi != DpiAt(Cursor.Position) || Math.Abs(_scale - _dpi / 96f * Math.Max(0.5f, Math.Min(3f, UserScale))) > 0.001f)
+                MakeFonts();
             var width = S(_mode == "diagnostics" ? DiagWidth : BaseWidth);
             int height;
             using (var g = CreateGraphics()) height = LayoutPanel(g, width, false);
