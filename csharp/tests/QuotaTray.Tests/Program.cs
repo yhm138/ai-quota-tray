@@ -244,6 +244,24 @@ namespace QuotaTray.Tests
                 ""mine"": {""options"": {""baseURL"": ""https://api.deepseek.com/v1"", ""apiKey"": ""sk-cfg""}}}}"), n => n == "MY_DS" ? "sk-fromenv" : null);
             Check("opencode.json key, env reference, relay skipped", ocKeys.SequenceEqual(new[] { "sk-fromenv", "sk-cfg" }), string.Join(",", ocKeys));
 
+            Check("opencode labels", DeepSeekProvider.OpencodeLabel(true, true) == "OpenCode CLI + OpenCode Desktop"
+                                     && DeepSeekProvider.OpencodeLabel(false, true) == "OpenCode Desktop"
+                                     && DeepSeekProvider.OpencodeLabel(true, false) == "OpenCode CLI"
+                                     && DeepSeekProvider.OpencodeLabel(false, false) == "OpenCode"
+                                     && DeepSeekProvider.OpencodeLabel(true, true, "Ubuntu", new[] { "Ubuntu" }) == "OpenCode CLI + OpenCode Desktop - WSL Ubuntu"
+                                     && DeepSeekProvider.OpencodeLabel(true, true, "Arch", new[] { "Ubuntu" }) == "OpenCode CLI - WSL Arch");
+            var ocAppdata = Path.Combine(Paths.AppDir, "oc-appdata");
+            Directory.CreateDirectory(Path.Combine(ocAppdata, "ai.opencode.desktop"));
+            File.WriteAllText(Path.Combine(ocAppdata, "ai.opencode.desktop", "opencode.settings"),
+                "{\"wslServers\":{\"servers\":[{\"id\":\"wsl:Ubuntu\",\"distro\":\"Ubuntu\"}]}}");
+            var desk = DeepSeekProvider.OpencodeDesktop(n => n == "APPDATA" ? ocAppdata : null);
+            Check("opencode desktop and its WSL servers", desk.Item1 != null && desk.Item2.SetEquals(new[] { "Ubuntu" }));
+            var ocBin = Path.Combine(Paths.AppDir, "oc-bin");
+            Directory.CreateDirectory(ocBin);
+            File.WriteAllText(Path.Combine(ocBin, "opencode.exe"), "");
+            Check("opencode cli on PATH", DeepSeekProvider.OpencodeCli(Path.Combine(Paths.AppDir, "nohome"), n => n == "PATH" ? ocBin : null, true)
+                                          == Path.Combine(ocBin, "opencode.exe"));
+            Check("no opencode cli", DeepSeekProvider.OpencodeCli(Path.Combine(Paths.AppDir, "nohome"), n => null, true) == null);
             var dsHome = Path.Combine(Paths.AppDir, "ds-home");
             Directory.CreateDirectory(Path.Combine(dsHome, ".local", "share", "opencode"));
             File.WriteAllText(Path.Combine(dsHome, ".local", "share", "opencode", "auth.json"), "{\"deepseek\":{\"type\":\"api\",\"key\":\"sk-shared1234\"}}");

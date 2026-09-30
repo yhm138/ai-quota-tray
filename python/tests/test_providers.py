@@ -1060,6 +1060,23 @@ check("opencode.json key, env reference, relay skipped", deepseek.opencode_confi
     "mine": {"options": {"baseURL": "https://api.deepseek.com/v1", "apiKey": "sk-cfg"}},
 }}, env={"MY_DS": "sk-fromenv"}) == ["sk-fromenv", "sk-cfg"])
 
+check("opencode labels", deepseek.opencode_label(True, True) == "OpenCode CLI + OpenCode Desktop"
+      and deepseek.opencode_label(False, True) == "OpenCode Desktop"
+      and deepseek.opencode_label(True, False) == "OpenCode CLI"
+      and deepseek.opencode_label(False, False) == "OpenCode"
+      and deepseek.opencode_label(True, True, "Ubuntu", {"Ubuntu"}) == "OpenCode CLI + OpenCode Desktop - WSL Ubuntu"
+      and deepseek.opencode_label(True, True, "Arch", {"Ubuntu"}) == "OpenCode CLI - WSL Arch")
+oc_appdata = Path(tempfile.mkdtemp())
+(oc_appdata / "ai.opencode.desktop").mkdir()
+(oc_appdata / "ai.opencode.desktop" / "opencode.settings").write_text(
+    json.dumps({"wslServers": {"servers": [{"id": "wsl:Ubuntu", "distro": "Ubuntu"}]}}), encoding="utf-8")
+desk, desk_distros = deepseek.opencode_desktop({"APPDATA": str(oc_appdata)})
+check("opencode desktop and its WSL servers", desk is not None and desk_distros == {"Ubuntu"})
+oc_bin = Path(tempfile.mkdtemp())
+(oc_bin / "opencode.exe").write_text("", encoding="utf-8")
+check("opencode cli on PATH", deepseek.opencode_cli(Path(tempfile.mkdtemp()), {"PATH": str(oc_bin)}, True)
+      == oc_bin / "opencode.exe")
+check("no opencode cli", deepseek.opencode_cli(Path(tempfile.mkdtemp()), {"PATH": ""}, True) is None)
 ds_home = Path(tempfile.mkdtemp())
 (ds_home / ".local" / "share" / "opencode").mkdir(parents=True)
 (ds_home / ".local" / "share" / "opencode" / "auth.json").write_text(

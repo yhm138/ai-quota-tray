@@ -162,7 +162,7 @@ def opencode_config_keys(data, env=None) -> list[str]:
 
 
 def _homes(settings: dict) -> list[tuple[Path, str]]:
-    """[(home folder, suffix for the label)]: Windows, then each WSL user."""
+    """[(home folder, WSL distro or "")]: Windows, then each WSL user."""
     homes = [(Path.home(), "")]
     if settings.get("scan_wsl", True):
         from .claude import _wsl_distros
@@ -175,8 +175,90 @@ def _homes(settings: dict) -> list[tuple[Path, str]]:
                     candidates += list((root / "home").iterdir())[:10]
             except OSError:
                 pass
-            homes += [(c, f" - WSL {distro}") for c in candidates]
+            homes += [(c, distro) for c in candidates]
     return homes
+
+
+# ------------------------------------------------------------ OpenCode CLI vs Desktop
+
+# OpenCode Desktop keeps its own settings in %APPDATA%\<app id>, but the
+# OpenCode server it runs reads the same auth.json as the CLI (it only moves
+# XDG_STATE_HOME). So on Windows the two share one key, and QuotaTray names
+# every app that uses it. Desktop can also run servers inside WSL distros.
+DESKTOP_APP_IDS = ("ai.opencode.desktop", "ai.opencode.desktop.beta")
+_CLI_NAMES = ("opencode.exe", "opencode.cmd", "opencode")
+
+
+def _which(names, env) -> Path | None:
+    for folder in (env.get("PATH") or "").split(os.pathsep):
+        folder = folder.strip().strip('"')
+        if not folder:
+            continue
+        for name in names:
+            try:
+                if (Path(folder) / name).is_file():
+                    return Path(folder) / name
+            except OSError:
+                continue
+    return None
+
+
+def opencode_cli(home: Path, env, local: bool) -> Path | None:
+    """Where the OpenCode CLI is installed for this home, if anywhere."""
+    if local:
+        found = _which(_CLI_NAMES, env)
+        if found:
+            return found
+    candidates = [home / ".opencode" / "bin" / n for n in _CLI_NAMES] + [
+        home / ".bun" / "bin" / "opencode.exe", home / ".bun" / "bin" / "opencode",
+        home / ".local" / "bin" / "opencode", home / ".npm-global" / "bin" / "opencode",
+        home / "scoop" / "shims" / "opencode.exe",
+    ]
+    if local:
+        for var, rel in (("APPDATA", ("npm", "opencode.cmd")),
+                         ("LOCALAPPDATA", ("Microsoft", "WinGet", "Links", "opencode.exe"))):
+            if env.get(var):
+                candidates.append(Path(env[var], *rel))
+    for path in candidates:
+        try:
+            if path.is_file():
+                return path
+        except OSError:
+            continue
+    return None
+
+
+def opencode_desktop(env) -> tuple[Path | None, set[str]]:
+    """(OpenCode Desktop's settings folder, WSL distros it runs servers in)."""
+    appdata = env.get("APPDATA")
+    if not appdata:
+        return None, set()
+    for app_id in DESKTOP_APP_IDS:
+        folder = Path(appdata) / app_id
+        try:
+            if not folder.is_dir():
+                continue
+        except OSError:
+            continue
+        distros: set[str] = set()
+        text = _read(folder / "opencode.settings")
+        try:
+            data = json.loads(text) if text else {}
+            servers = (data.get("wslServers") or {}).get("servers") or []
+            distros = {s["distro"] for s in servers if isinstance(s, dict) and isinstance(s.get("distro"), str)}
+        except (ValueError, AttributeError, TypeError):
+            pass
+        return folder, distros
+    return None, set()
+
+
+def opencode_label(cli: bool, desktop: bool, distro: str = "", desktop_distros=()) -> str:
+    """Which OpenCode apps use the auth.json of this home."""
+    if not distro:
+        names = (["OpenCode CLI"] if cli else []) + (["OpenCode Desktop"] if desktop else [])
+        return " + ".join(names) or "OpenCode"
+    names = (["OpenCode CLI"] if cli else []) + (["OpenCode Desktop"] if distro in desktop_distros else [])
+    return f"{' + '.join(names) or 'OpenCode'} - WSL {distro}"
 
 
 def _read(path: Path) -> str | None:
@@ -197,8 +279,12 @@ def discover_keys(settings: dict, env=None) -> tuple[list[tuple[str, str]], list
     if manual:
         found.append((manual, "config.json"))
 
-    for home, suffix in _homes(settings):
+    desktop_dir, desktop_distros = opencode_desktop(env)
+    for home, distro in _homes(settings):
+        suffix = f" - WSL {distro}" if distro else ""
         if settings.get("scan_opencode", True):
+            cli = opencode_cli(home, env, local=not distro)
+            oc_label = opencode_label(cli is not None, desktop_dir is not None, distro, desktop_distros)
             data_dirs = [home / ".local" / "share" / "opencode"]
             if not suffix:
                 if env.get("XDG_DATA_HOME"):
@@ -218,7 +304,7 @@ def discover_keys(settings: dict, env=None) -> tuple[list[tuple[str, str]], list
                 except ValueError:
                     notes.append(f"{path}: not valid JSON")
                     continue
-                found += [(k, f"OpenCode{suffix}") for k in keys]
+                found += [(k, oc_label) for k in keys]
                 if not keys:
                     notes.append(f"{path}: no DeepSeek key (add one with /connect in OpenCode)")
             config_dirs = [home / ".config" / "opencode"]
@@ -236,7 +322,7 @@ def discover_keys(settings: dict, env=None) -> tuple[list[tuple[str, str]], list
                 except ValueError:
                     notes.append(f"{path}: could not be parsed")
                     continue
-                found += [(k, f"OpenCode{suffix}") for k in keys]
+                found += [(k, oc_label) for k in keys]
 
         if settings.get("scan_dsh", True):
             dsh_home = Path(env["DSH_HOME"]) if (not suffix and (env.get("DSH_HOME") or "").strip()) \
@@ -352,6 +438,15 @@ class DeepSeekProvider(Provider):
             return
         for note in notes:
             result.attempts.append(SourceAttempt("key search", False, note))
+        if self.settings.get("scan_opencode", True):
+            desktop, distros = opencode_desktop(os.environ)
+            cli = opencode_cli(Path.home(), os.environ, local=True)
+            detail = f"CLI: {cli or 'not found'}; Desktop: {desktop or 'not found'}"
+            if distros:
+                detail += f" (WSL servers: {', '.join(sorted(distros))})"
+            if cli and desktop:
+                detail += "; both read the same auth.json, so they share one key"
+            result.attempts.append(SourceAttempt("OpenCode apps", True, detail))
         # One page per distinct key; every tool holding it is named on it.
         merged: dict[str, list[str]] = {}
         for key, where in found:
