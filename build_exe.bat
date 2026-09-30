@@ -7,7 +7,7 @@ if not exist ".venv\Scripts\python.exe" (
     pause
     exit /b 1
 )
-".venv\Scripts\python.exe" -m pip install pyinstaller -q --disable-pip-version-check
+".venv\Scripts\python.exe" -m pip install "pyinstaller>=6.9" -q --disable-pip-version-check
 ".venv\Scripts\python.exe" tools\make_icon.py
 ".venv\Scripts\python.exe" -m PyInstaller --noconfirm --clean --onefile --noconsole ^
     --name QuotaTray ^

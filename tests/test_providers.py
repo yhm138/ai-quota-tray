@@ -938,6 +938,33 @@ check("portable swap happens after exit", plan and plan.command[0] == "powershel
       and "Wait-Process" in plan.command[-1] and "robocopy" in plan.command[-1], plan and plan.command)
 check("sums parser", selfupdate.parse_sums("ab" * 32 + "  *a b.exe\n") == {"a b.exe": "ab" * 32})
 
+from quota_tray.win.proc import independent_env                    # noqa: E402
+
+inherited = {"PATH": "/bin", "_PYI_ARCHIVE_FILE": "C:/app.exe", "_PYI_APPLICATION_HOME_DIR": "C:/T/_MEI1",
+             "_MEIPASS2": "C:/T/_MEI1", "_PYI_PARENT_PROCESS_LEVEL": "1"}
+fresh = independent_env(inherited)
+check("new copies start with a clean PyInstaller environment",
+      fresh == {"PATH": "/bin", "PYINSTALLER_RESET_ENVIRONMENT": "1"}, fresh)
+
+from quota_tray import app as qt_app                                 # noqa: E402
+
+launched = []
+import subprocess as _subprocess                                     # noqa: E402
+
+orig_popen = _subprocess.Popen
+_subprocess.Popen = lambda cmd, **kw: launched.append((cmd, kw.get("env", {})))
+sys.frozen = True
+try:
+    stepped_aside = qt_app._relaunch_clean(["--wait-pid", "4321", "--updated-from", "1.3.3"])
+    again = qt_app._relaunch_clean(["--wait-pid", "4321", "--updated-from", "1.3.3", "--fresh"])
+finally:
+    _subprocess.Popen = orig_popen
+    del sys.frozen
+check("copy started by an old version relaunches clean once",
+      stepped_aside and not again and len(launched) == 1
+      and launched[0][0][-1] == "--fresh" and "4321" in launched[0][0]
+      and launched[0][1].get("PYINSTALLER_RESET_ENVIRONMENT") == "1", launched)
+
 # ------------------------------------------------------------------ TLS bundle
 
 print("\n--- TLS bundle ---")
