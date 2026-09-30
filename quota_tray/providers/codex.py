@@ -186,8 +186,10 @@ def _windows_from_rate_limits(node: dict, base) -> list[QuotaWindow]:
             or sub.get("windowMinutes")
             or sub.get("window_size_minutes")
         )
-        seconds = sub.get("window_seconds") or sub.get("windowSeconds") or sub.get(
-            "window_size_seconds"
+        seconds = (
+            sub.get("window_seconds") or sub.get("windowSeconds")
+            or sub.get("window_size_seconds") or sub.get("limit_window_seconds")
+            or sub.get("windowDurationSeconds")
         )
         if minutes is None and isinstance(seconds, (int, float)) and seconds > 0:
             minutes = float(seconds) / 60.0
@@ -438,12 +440,24 @@ def codex_resets(usage: dict, reset_payload: dict) -> list[ResetGrant]:
     return grants
 
 
+SNAPSHOT_SOURCES = ("jsonl", "sqlite")
+
+
 class CodexProvider(Provider):
     id = "codex"
     name = "Codex"
 
     def detect(self) -> bool:
         return codex_home(self.settings).is_dir() or find_codex_exe() is not None
+
+    def _login_time(self):
+        """When the current login was written; older local data may be
+        another account's (switching accounts rewrites auth.json)."""
+        _tokens, origin = self._auth_tokens()
+        try:
+            return parse_time(Path(origin).stat().st_mtime) if origin else None
+        except OSError:
+            return None
 
     # ---------------- 1. wham
 
@@ -518,6 +532,8 @@ class CodexProvider(Provider):
         result.ok = True
         result.source = "chatgpt.com/wham/usage"
         result.plan = _plan_of(payload)
+        email = jwt_claims(tokens.get("id_token")).get("email")
+        result.account = email if isinstance(email, str) else None
         result.status = "connected"
         result.data_time = now_utc()
         result.attempts.append(SourceAttempt("ChatGPT usage API", True, origin))
@@ -601,6 +617,10 @@ class CodexProvider(Provider):
             return False
 
         cutoff = now_utc() - timedelta(days=int(self.settings.get("jsonl_max_days", 14)))
+        login = self._login_time()
+        if login and login > cutoff:
+            # Logs from before the current login may belong to another account.
+            cutoff = login
         for path in files:
             for line in iter_lines_reverse(path):
                 if "rate_limit" not in line:
@@ -627,9 +647,10 @@ class CodexProvider(Provider):
                 result.status = "connected (offline snapshot)"
                 result.attempts.append(SourceAttempt("session logs", True, str(path)))
                 return True
-        result.attempts.append(
-            SourceAttempt("session logs", False, f"scanned {len(files)} logs, no rate_limits")
-        )
+        why = f"scanned {len(files)} logs, no rate_limits"
+        if login and cutoff == login:
+            why += f" newer than the current Codex login ({login.astimezone():%Y-%m-%d %H:%M})"
+        result.attempts.append(SourceAttempt("session logs", False, why))
         return False
 
     # ---------------- 4. sqlite
@@ -646,6 +667,13 @@ class CodexProvider(Provider):
             result.attempts.append(SourceAttempt("local database", False, "no sqlite file found"))
             return False
         dbs.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        login = self._login_time()
+        if login:
+            dbs = [db for db in dbs if parse_time(db.stat().st_mtime) >= login]
+            if not dbs:
+                result.attempts.append(SourceAttempt(
+                    "local database", False, "no database written since the current Codex login"))
+                return False
 
         for db in dbs[:4]:
             hit = _scan_sqlite_for_rate_limits(db)
@@ -690,10 +718,16 @@ class CodexProvider(Provider):
         sources: list[str] = []
         stale_source = False
         oldest_data = None
+        live_ok = False
 
         for name in order:
             fn = steps.get(name)
             if not fn:
+                continue
+            if live_ok and name in SNAPSHOT_SOURCES:
+                # A live answer is complete for the signed-in account even when
+                # it has one window (some plans only have a weekly limit).
+                # Topping it up from local logs mixed in other accounts' data.
                 continue
             probe = ProviderResult(provider_id=self.id, name=self.name, fetched_at=now_utc())
             # One broken source must not throw away what the others found.
@@ -706,6 +740,10 @@ class CodexProvider(Provider):
             result.attempts.extend(probe.attempts)
             if not ok:
                 continue
+            if name not in SNAPSHOT_SOURCES:
+                live_ok = True
+            if probe.account and not result.account:
+                result.account = probe.account
 
             added = False
             for window in probe.windows:

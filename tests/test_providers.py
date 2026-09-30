@@ -299,7 +299,8 @@ for node, expect in [
     got = {w.label for w in codex._windows_from_rate_limits(node, now_utc())}
     check(f"codex labels {sorted(expect)}", got == expect, got)
 
-# merging: wham returns only the weekly window, the session log supplies the 5-hour one
+# A live answer is complete for the signed-in account: a session log must not
+# top it up (after an account switch the logs hold the old account's numbers).
 wham_partial = {"rate_limits": {"primary_window": {"used_percent": 18.0,
                                                    "resets_in_seconds": 504000}}, "plan": "pro"}
 codex.session = lambda: fake_session(get=lambda *a, **k: FakeResp(wham_partial))
@@ -310,19 +311,37 @@ day2.mkdir(parents=True)
     "timestamp": (now_utc() - timedelta(hours=1)).isoformat(),
     "payload": {"type": "token_count", "rate_limits": {
         "primary": {"used_percent": 63.0, "window_minutes": 300, "resets_in_seconds": 5400},
-        "secondary": {"used_percent": 18.0, "window_minutes": 10080,
+        "secondary": {"used_percent": 77.0, "window_minutes": 10080,
                       "resets_in_seconds": 504000}}}}), encoding="utf-8")
+new_login = tmp2 / "auth.json"
+new_login.write_text("{}")
+_claims = __import__("base64").urlsafe_b64encode(
+    json.dumps({"email": "new@example.com"}).encode()).decode().rstrip("=")
 cp3 = codex.CodexProvider(Config({"providers": {"codex": {"codex_home": str(tmp2)}}}))
 cp3.detect = lambda: True
-cp3._auth_tokens = lambda: ({"access_token": "t"}, "/fake/auth.json")
+cp3._auth_tokens = lambda: ({"access_token": "t", "id_token": f"h.{_claims}.s"}, str(new_login))
 r = cp3.fetch()
-check("merge covers both windows",
-      {w.label for w in r.windows} == {"5-hour window", "7-day window"},
-      [w.label for w in r.windows])
-check("merge names both sources", " + " in (r.source or ""), r.source)
-check("merge flags partial staleness", "offline snapshot" in r.status, r.status)
-check("merge dedupes the weekly window", len(r.windows) == 2, len(r.windows))
+check("live answer is not topped up from logs",
+      [(w.label, w.percent) for w in r.windows] == [("7-day window", 18.0)],
+      [(w.label, w.percent) for w in r.windows])
+check("live answer names only the live source", r.source == "chatgpt.com/wham/usage", r.source)
+check("codex card shows the signed-in account", r.account == "new@example.com", r.account)
 
+# Without a live source, logs written before the current login are ignored...
+codex.session = lambda: fake_session(get=lambda *a, **k: FakeResp({}, 401))
+r = cp3.fetch()
+check("logs from before the login are skipped", not r.ok and any(
+    "newer than the current Codex login" in a.detail for a in r.attempts), r.attempts)
+# ...and newer ones are used.
+import os as _os                                                     # noqa: E402
+old = (now_utc() - timedelta(hours=3)).timestamp()
+_os.utime(new_login, (old, old))
+r = cp3.fetch()
+check("logs from after the login still work offline", r.ok and "offline snapshot" in r.status,
+      r.status)
+check("wham window length is read", {w.label for w in codex._windows_from_rate_limits(
+    {"primary_window": {"used_percent": 5, "limit_window_seconds": 18000}}, now_utc())}
+      == {"5-hour window"})
 # ------------------------------------------------------------------ Antigravity
 
 print("\n--- Antigravity ---")
