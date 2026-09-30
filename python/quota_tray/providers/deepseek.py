@@ -424,6 +424,7 @@ class DeepSeekProvider(Provider):
         page.headline = headline
         page.plan = "Pay as you go"
         page.account = f"key {mask(key)}"
+        page.secret = key
         page.source = "api.deepseek.com/user/balance"
         page.status = "connected" if available else "balance too low"
         page.data_time = now_utc()

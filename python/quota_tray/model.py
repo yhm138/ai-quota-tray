@@ -83,6 +83,9 @@ class ProviderResult:
     label: str | None = None               # which login this is, e.g. "Claude Desktop"
     billing: str = "subscription"          # "subscription" or "payg" (pay as you go): the panel tab
     headline: str | None = None            # short summary when there are no bars, e.g. a balance
+    # The API key behind a pay-as-you-go page, for hover and Copy in the panel.
+    # Memory only: never written to cache.json or the diagnostics report.
+    secret: str | None = field(default=None, repr=False)
     # Other accounts of the same product signed in elsewhere on this machine
     # (Claude Code vs Claude Desktop, Windows vs WSL Codex), one page each.
     alternates: list["ProviderResult"] = field(default_factory=list)
@@ -93,7 +96,7 @@ class ProviderResult:
     def adopt(self, page: "ProviderResult") -> None:
         """Take over everything a single-account page found."""
         for name in ("ok", "status", "source", "account", "plan", "windows", "data_time",
-                     "info", "resets", "label", "headline"):
+                     "info", "resets", "label", "headline", "secret"):
             setattr(self, name, getattr(page, name))
 
     def active_resets(self, now: datetime | None = None) -> list[ResetGrant]:

@@ -102,6 +102,9 @@ namespace QuotaTray.Core
         public string Label;                 // which login this is, e.g. "Claude Desktop"
         public string Billing = "subscription";   // "subscription" or "payg" (pay as you go): the panel tab
         public string Headline;              // short summary when there are no bars, e.g. a balance
+        // The API key behind a pay-as-you-go page, for hover and Copy in the panel.
+        // Memory only: never written to cache.json or the diagnostics report.
+        public string Secret;
         // Other accounts of the same product signed in elsewhere on this
         // machine (Claude Code vs Claude Desktop, Windows vs WSL Codex).
         public List<ProviderResult> Alternates = new List<ProviderResult>();
@@ -123,7 +126,7 @@ namespace QuotaTray.Core
         {
             Ok = page.Ok; Status = page.Status; Source = page.Source; Account = page.Account;
             Plan = page.Plan; Windows = page.Windows; DataTime = page.DataTime; Info = page.Info;
-            Resets = page.Resets; Label = page.Label; Headline = page.Headline;
+            Resets = page.Resets; Label = page.Label; Headline = page.Headline; Secret = page.Secret;
         }
 
         public List<ResetGrant> ActiveResets(DateTimeOffset? now = null) =>

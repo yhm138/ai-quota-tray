@@ -293,6 +293,9 @@ namespace QuotaTray.Tests
             Check("deepseek: pay-as-you-go tab", dr.Billing == "payg" && dr.Plan == "Pay as you go" && dr.Account == "key sk-...1234");
             Check("deepseek: keys only go to api.deepseek.com", seenUrls.SetEquals(new[] { DeepSeekProvider.BalanceUrl }));
             Check("deepseek: survives the cache", ProviderResult.FromCache(Json.ParseObject(Json.Write(dr.ToCache()))).Billing == "payg");
+            Check("deepseek: full key kept for hover / Copy", dr.Secret == "sk-shared1234" && dr.Alternates[0].Secret == "sk-envonly9999");
+            Check("deepseek: full key never cached", !Json.Write(dr.ToCache()).Contains("sk-shared1234")
+                                                     && ProviderResult.FromCache(dr.ToCache()).Secret == null);
             DeepSeekProvider.Env = n => null;
             File.Delete(Path.Combine(dsHome, ".local", "share", "opencode", "auth.json"));
             File.Delete(Path.Combine(dsHome, ".dsh", ".credentials.yaml"));
