@@ -132,18 +132,48 @@ def _update_script(repo: str, tag: str) -> Path:
     raise RuntimeError("update.ps1 is not available; download the release manually")
 
 
-def launch(release: Release, repo: str = DEFAULT_REPO) -> None:
-    """Start update.ps1 detached. The caller must exit right after this."""
+def launch(release: Release, repo: str = DEFAULT_REPO):
+    """Start update.ps1 detached; returns (process, ready file).
+
+    Keep running until the ready file appears: the script writes it once the
+    new version is downloaded and verified, and only then may the app exit
+    (the script waits for that, swaps the files and starts the new version).
+    If the process ends first, the update failed and the app should stay.
+    """
     if sys.platform != "win32":
         raise RuntimeError("self-update is only supported on Windows")
+    from .config import app_dir
+
     script = _update_script(repo, release.tag)
+    ready = app_dir() / f"update-ready-{os.getpid()}.txt"
+    try:
+        ready.unlink()
+    except OSError:
+        pass
     args = [
         "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
         "-WindowStyle", "Hidden", "-File", str(script),
         "-Repo", repo, "-Tag", release.tag,
         "-InstallDir", str(program_dir()),
         "-WaitPid", str(os.getpid()),
+        "-ReadyFile", str(ready),
     ]
     flags = 0x00000008 | 0x00000200 | 0x08000000   # DETACHED | NEW_GROUP | NO_WINDOW
     log.info("launching updater for %s: %s", release.tag, script)
-    subprocess.Popen(args, creationflags=flags, close_fds=True, cwd=str(program_dir()))
+    proc = subprocess.Popen(args, creationflags=flags, close_fds=True, cwd=str(program_dir()))
+    return proc, ready
+
+
+def last_log_line() -> str:
+    """The updater's most recent message, for showing why it stopped."""
+    from .config import app_dir
+
+    try:
+        lines = (app_dir() / "update.log").read_text(encoding="utf-8-sig", errors="replace")
+    except OSError:
+        return "see update.log"
+    for line in reversed(lines.splitlines()):
+        if line.strip():
+            text = line.split("  ", 1)[-1].strip()
+            return text[len("update failed: "):] if text.startswith("update failed: ") else text
+    return "see update.log"

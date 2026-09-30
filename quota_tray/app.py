@@ -303,16 +303,36 @@ class QuotaTrayApp:
         self._post(lambda: self.panel.set_notice(
             f"Downloading {release.tag}... QuotaTray will close and restart by itself."))
 
+        def failed(why: str) -> None:
+            self._post(lambda: self.panel.set_notice(
+                f"Update failed: {why}", "warn", "Retry", self._on_apply_update))
+
         def run():
+            import time
+
             try:
-                updater.launch(release, self._update_repo())
+                proc, ready = updater.launch(release, self._update_repo())
             except Exception as exc:                            # noqa: BLE001
                 log.exception("could not start the updater")
-                why = str(exc) or exc.__class__.__name__
-                self._post(lambda: self.panel.set_notice(
-                    f"The update could not start: {why}", "warn", "Retry", self._on_apply_update))
+                failed(str(exc) or exc.__class__.__name__)
                 return
-            self._post(lambda: self.root.after(1500, self.quit))
+            # Stay up until the new version is downloaded and verified, so a
+            # failed download never leaves the user without the tray app.
+            deadline = time.time() + 600
+            while time.time() < deadline:
+                if ready.exists():
+                    log.info("updater has %s ready; closing so it can be installed", release.tag)
+                    self._post(lambda: self.panel.set_notice(
+                        f"Installing {release.tag}... QuotaTray restarts in a moment."))
+                    self._post(lambda: self.root.after(800, self.quit))
+                    return
+                if proc.poll() is not None:
+                    why = updater.last_log_line()
+                    log.warning("updater exited early: %s", why)
+                    failed(why)
+                    return
+                time.sleep(0.5)
+            failed("the download is taking too long; see update.log")
 
         threading.Thread(target=run, name="update-apply", daemon=True).start()
 
