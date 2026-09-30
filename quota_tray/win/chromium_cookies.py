@@ -100,10 +100,11 @@ def master_key(local_state: Path) -> bytes:
 
 
 def _aesgcm_decrypt(key: bytes, blob: bytes) -> bytes:
-    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    """blob = "v10" || 12-byte nonce || ciphertext || 16-byte tag."""
+    from .aesgcm import decrypt
 
     nonce, payload = blob[3:15], blob[15:]
-    return AESGCM(key).decrypt(nonce, payload, None)
+    return decrypt(key, nonce, payload)
 
 
 def decrypt_value(raw: bytes, key: bytes | None, *, has_domain_hash: bool | None = None) -> str:

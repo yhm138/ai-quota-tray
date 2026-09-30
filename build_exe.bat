@@ -7,14 +7,37 @@ if not exist ".venv\Scripts\python.exe" (
     pause
     exit /b 1
 )
-".venv\Scripts\python.exe" -m pip install "pyinstaller>=6.9" -q --disable-pip-version-check
+".venv\Scripts\python.exe" -m pip install "pyinstaller>=6.11" -q --disable-pip-version-check
 ".venv\Scripts\python.exe" tools\make_icon.py
-".venv\Scripts\python.exe" -m PyInstaller --noconfirm --clean --onefile --noconsole ^
+".venv\Scripts\python.exe" -m PyInstaller --noconfirm --clean --onefile --noconsole --optimize 2 ^
     --name QuotaTray ^
     --icon assets\quotatray.ico ^
     --hidden-import pystray._win32 ^
-    --hidden-import PIL._tkinter_finder ^
-    --collect-all curl_cffi ^
+    --exclude-module cryptography ^
+    --exclude-module cffi ^
+    --exclude-module curl_cffi ^
+    --exclude-module PIL._avif ^
+    --exclude-module PIL.AvifImagePlugin ^
+    --exclude-module PIL._webp ^
+    --exclude-module PIL.WebPImagePlugin ^
+    --exclude-module PIL._imagingft ^
+    --exclude-module PIL._imagingcms ^
+    --exclude-module PIL.ImageCms ^
+    --exclude-module PIL._imagingmath ^
+    --exclude-module PIL._imagingmorph ^
+    --exclude-module PIL.ImageTk ^
+    --exclude-module PIL._tkinter_finder ^
+    --exclude-module PIL.ImageQt ^
+    --exclude-module setuptools ^
+    --exclude-module pkg_resources ^
+    --exclude-module unittest ^
+    --exclude-module pydoc ^
+    --exclude-module doctest ^
+    --exclude-module pdb ^
+    --exclude-module lib2to3 ^
+    --exclude-module xmlrpc ^
+    --exclude-module tkinter.test ^
+    --exclude-module test ^
     run.pyw
 echo.
 echo Done: dist\QuotaTray.exe

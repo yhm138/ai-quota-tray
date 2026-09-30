@@ -3,7 +3,8 @@ installs the new version while it keeps running and showing progress, and
 only then hands over to the new version.
 
 A running .exe cannot be overwritten on Windows, but it can be renamed. So
-the one-file build moves itself to <name>.old and puts the new file in its
+the one-file build moves itself into a hidden .quotatray-trash folder (the
+new version deletes it for good once it runs) and puts the new file in its
 place before exiting; the portable build unpacks next to itself and a small
 helper copies it over once this process has exited; a source install is
 updated in place (Python has already loaded what it needs).
@@ -192,12 +193,13 @@ def install(release_tag: str, repo: str, progress: Progress) -> Plan:
         if kind == "exe":
             new = exe.with_name(exe.name + ".new")
             os.replace(payload, new)
-            old = exe.with_name(exe.name + ".old")
-            try:
-                old.unlink()
-            except FileNotFoundError:
-                pass
-            os.replace(exe, old)                 # a running exe may be renamed
+            # A running exe cannot be deleted, only renamed: park it in a
+            # hidden folder that the new version empties once this one exits.
+            trash = folder / TRASH_DIR
+            trash.mkdir(exist_ok=True)
+            _hide(trash)
+            old = trash / f"{exe.name}.{os.getpid()}"
+            os.replace(exe, old)
             try:
                 os.replace(new, exe)
             except OSError:
@@ -273,13 +275,47 @@ def _install_source(tag: str, repo: str, progress: Progress, after: list[str]) -
         shutil.rmtree(work, ignore_errors=True)
 
 
-def cleanup_after_update() -> None:
-    """Run by the new version: remove what the swap left behind."""
-    if not getattr(sys, "frozen", False):
-        return
-    exe = Path(sys.executable)
-    for leftover in (exe.with_name(exe.name + ".old"), exe.with_name(exe.name + ".new")):
+TRASH_DIR = ".quotatray-trash"
+
+
+def _hide(path: Path) -> None:
+    if sys.platform == "win32":
         try:
-            leftover.unlink()
-        except OSError:
+            import ctypes
+
+            ctypes.windll.kernel32.SetFileAttributesW(str(path), 0x2)   # HIDDEN
+        except Exception:                                       # noqa: BLE001
             pass
+
+
+def cleanup_after_update(folder: Path | None = None, attempts: int = 30, delay: float = 2.0) -> bool:
+    """Permanently delete what an update left next to the exe: the previous
+    version (parked in .quotatray-trash, or <name>.old from v1.3.2-1.3.4) and
+    stray downloads. The previous process may still be exiting, so retry for
+    a while. Returns True when nothing is left."""
+    import time
+
+    if folder is None:
+        if not getattr(sys, "frozen", False):
+            return True
+        folder = Path(sys.executable).parent
+    for _ in range(max(1, attempts)):
+        leftovers = [folder / TRASH_DIR, folder / ".quotatray-update",
+                     *folder.glob("*.exe.old"), *folder.glob("*.exe.new")]
+        remaining = []
+        for item in leftovers:
+            if not item.exists():
+                continue
+            try:
+                if item.is_dir():
+                    shutil.rmtree(item)
+                else:
+                    item.unlink()
+                log.info("removed update leftover %s", item.name)
+            except OSError:
+                remaining.append(item)
+        if not remaining:
+            return True
+        time.sleep(delay)
+    log.info("could not remove %s yet; will retry next start", [p.name for p in remaining])
+    return False

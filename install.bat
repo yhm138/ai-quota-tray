@@ -54,7 +54,7 @@ if errorlevel 1 (
     echo   [-] Default index failed, retrying via the Tsinghua mirror ...
     ".venv\Scripts\python.exe" -m pip install -r requirements.txt -q --disable-pip-version-check -i https://pypi.tuna.tsinghua.edu.cn/simple
 )
-".venv\Scripts\python.exe" -c "import pystray, PIL, requests, cryptography" >nul 2>nul
+".venv\Scripts\python.exe" -c "import pystray, PIL, requests" >nul 2>nul
 if errorlevel 1 (
     echo   [X] Dependencies are incomplete. Send the errors above to your admin.
     pause
