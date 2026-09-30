@@ -79,6 +79,21 @@ DEFAULTS: dict[str, Any] = {
             "show_models": True,
             "max_models": 6,
         },
+        "gemini": {
+            "enabled": True,
+            "gemini_home": "",           # manual fallback: alternate .gemini folder
+            "scan_wsl": True,
+        },
+        "trae": {
+            "enabled": True,
+            "storage_path": "",          # manual fallback: a storage.json path
+            "cn": True,                  # the manual path is a Trae CN install
+            "scan_wsl": True,
+        },
+        "doubao": {
+            "enabled": True,
+            "session_id": "",            # manual fallback: a doubao.com sessionid cookie
+        },
         "deepseek": {
             "enabled": True,
             "api_key": "",               # manual fallback: a DeepSeek API key

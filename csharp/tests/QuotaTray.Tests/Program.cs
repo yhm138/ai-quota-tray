@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Security.Cryptography;
 using QuotaTray.Core;
 using QuotaTray.Providers;
 using QuotaTray.Update;
@@ -227,6 +228,174 @@ namespace QuotaTray.Tests
             Check("csrf from command line", AntigravityProvider.ExtractArg("ls.exe --csrf_token abc-123 --x", "--csrf_token") == "abc-123");
             var ports = AntigravityProvider.ParseNetstat("  TCP    127.0.0.1:50123   0.0.0.0:0   LISTENING   4242\n  TCP 127.0.0.1:1 1.2.3.4:5 ESTABLISHED 4242\n");
             Check("netstat ports", ports.ContainsKey(4242) && ports[4242].SequenceEqual(new[] { 50123 }));
+
+            Console.WriteLine("--- Gemini CLI ---");
+            var freshTok = GeminiProvider.AccessToken(J("{\"access_token\":\"live\",\"expiry_date\":" + ((now.ToUnixTimeSeconds() + 3600) * 1000) + "}"));
+            Check("gemini: fresh token used as-is", freshTok.Item1 == "live" && freshTok.Item2 == null);
+            var expTok = GeminiProvider.AccessToken(J("{\"access_token\":\"old\",\"expiry_date\":1}"));
+            Check("gemini: expired token asks to run gemini", expTok.Item1 == null && expTok.Item2.Contains("run `gemini`"), expTok.Item2);
+            Check("gemini: no token explained", GeminiProvider.AccessToken(new JObj()).Item2.Contains("no access token"));
+            Http.Send = req =>
+            {
+                if (req.Url.EndsWith(":loadCodeAssist"))
+                    return new HttpReply(200, "{\"currentTier\":{\"id\":\"standard-tier\",\"name\":\"Standard\"},\"cloudaicompanionProject\":\"proj-123\"}");
+                if (req.Url.EndsWith(":retrieveUserQuota"))
+                {
+                    Check("gemini: quota query used the project id", req.Body == "{\"project\":\"proj-123\"}", req.Body);
+                    return new HttpReply(200, "{\"buckets\":[{\"modelId\":\"gemini-2.5-pro\",\"remainingFraction\":0.4,\"remainingAmount\":\"600\",\"tokenType\":\"REQUESTS\",\"resetTime\":\"" + later + "\"},{\"modelId\":\"gemini-2.5-flash\",\"remainingFraction\":1.0}]}");
+                }
+                return new HttpReply(404, "{}");
+            };
+            var gid = Convert.ToBase64String(Encoding.UTF8.GetBytes("{\"email\":\"me@gmail.com\"}")).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+            var gp = new GeminiProvider(new Config())
+            {
+                DiscoverOverride = () => Tuple.Create(new List<KeyValuePair<JObj, string>>
+                {
+                    new KeyValuePair<JObj, string>(J("{\"access_token\":\"t\",\"expiry_date\":" + ((now.ToUnixTimeSeconds() + 3600) * 1000) + ",\"id_token\":\"h." + gid + ".s\"}"), "Gemini CLI"),
+                }, new List<string>()),
+            };
+            var gr = gp.Fetch();
+            Check("gemini connects", gr.Ok && gr.Source == "cloudcode-pa.googleapis.com", gr.Status);
+            Check("gemini: two model windows", gr.SortedWindows().Select(w => w.Label).SequenceEqual(new[] { "Gemini 2.5 Pro", "Gemini 2.5 Flash" }),
+                string.Join(",", gr.SortedWindows().Select(w => w.Label)));
+            Check("gemini: 2.5 pro is 60% used", gr.SortedWindows()[0].PercentText == "60%" && gr.SortedWindows()[0].Detail == "600 left (requests)",
+                gr.SortedWindows()[0].PercentText + " / " + gr.SortedWindows()[0].Detail);
+            Check("gemini: flash unused", gr.SortedWindows()[1].Percent == 0.0);
+            Check("gemini: plan and account", gr.Plan == "Standard" && gr.Account == "me@gmail.com", gr.Plan + " / " + gr.Account);
+            Check("gemini: subscription tab", gr.Billing == "subscription");
+            Check("gemini: survives the cache", ProviderResult.FromCache(Json.ParseObject(Json.Write(gr.ToCache()))).Plan == "Standard");
+            Http.Send = req => new HttpReply(401, "{}");
+            gp.DiscoverOverride = () => Tuple.Create(new List<KeyValuePair<JObj, string>>
+            {
+                new KeyValuePair<JObj, string>(J("{\"access_token\":\"t\",\"expiry_date\":" + ((now.ToUnixTimeSeconds() + 3600) * 1000) + "}"), "Gemini CLI"),
+            }, new List<string>());
+            var g401 = gp.Fetch();
+            Check("gemini: 401 is explained", !g401.Ok && g401.Status.Contains("sign in to Gemini again"), g401.Status);
+
+            Console.WriteLine("--- TRAE ---");
+            Func<byte[], bool, byte[]> traeEncrypt = (plaintext, priv) =>
+            {
+                var keyMaterial = new byte[32];
+                using (var rng = RandomNumberGenerator.Create()) rng.GetBytes(keyMaterial);
+                byte[] merged;
+                using (var sha = SHA512.Create())
+                {
+                    var kh = sha.ComputeHash(keyMaterial);
+                    var input = new byte[kh.Length + 64];
+                    Buffer.BlockCopy(kh, 0, input, 0, kh.Length);
+                    Buffer.BlockCopy(TraeProvider.Salt(priv), 0, input, kh.Length, 64);
+                    merged = sha.ComputeHash(input);
+                }
+                byte[] payload;
+                using (var sha = SHA512.Create())
+                {
+                    var digest = sha.ComputeHash(plaintext);
+                    payload = digest.Concat(plaintext).ToArray();
+                }
+                var pad = 16 - (payload.Length % 16);
+                payload = payload.Concat(Enumerable.Repeat((byte)pad, pad)).ToArray();
+                byte[] ct;
+                using (var aes = Aes.Create())
+                {
+                    aes.KeySize = 128; aes.Mode = CipherMode.CBC; aes.Padding = PaddingMode.None;
+                    aes.Key = merged.Take(16).ToArray(); aes.IV = merged.Skip(16).Take(16).ToArray();
+                    using (var enc = aes.CreateEncryptor()) ct = enc.TransformFinalBlock(payload, 0, payload.Length);
+                }
+                var header = priv ? new byte[] { 18, 57, 32, 32, 2, 3 } : new byte[] { 116, 99, 5, 16, 0, 0 };
+                return header.Concat(keyMaterial).Concat(ct).ToArray();
+            };
+            var authDoc = "{\"accessToken\":\"trae-jwt-123\",\"email\":\"me@trae.cn\"}";
+            var blob = traeEncrypt(Encoding.UTF8.GetBytes(authDoc), false);
+            var b64 = Convert.ToBase64String(blob);
+            Check("trae: byte-crypto round trip", TraeProvider.ByteCryptoDecrypt(blob) != null
+                && Encoding.UTF8.GetString(TraeProvider.ByteCryptoDecrypt(blob)) == authDoc);
+            var tampered = (byte[])blob.Clone(); tampered[tampered.Length - 1] ^= 1;
+            Check("trae: tampered blob rejected", TraeProvider.ByteCryptoDecrypt(tampered) == null);
+            Check("trae: private-variant round trip", Encoding.UTF8.GetString(TraeProvider.ByteCryptoDecrypt(traeEncrypt(Encoding.UTF8.GetBytes("hello"), true))) == "hello");
+            var storePath = Path.Combine(Paths.AppDir, "storage.json");
+            File.WriteAllText(storePath, "{\"iCubeAuthInfo://icube.cloudide\":" + Json.Write(b64) + ",\"iCubeAuthInfo://usertag\":\"x\"}");
+            var sauth = TraeProvider.ReadStorageAuth(storePath);
+            Check("trae: token and email from storage.json", sauth.Item1 == "trae-jwt-123" && sauth.Item2 == "me@trae.cn", sauth.Item1 + "/" + sauth.Item2);
+            var plainStore = Path.Combine(Paths.AppDir, "storage-plain.json");
+            File.WriteAllText(plainStore, "{\"iCubeAuthInfo://icube.cloudide\":\"{\\\"token\\\":\\\"plain-jwt\\\"}\"}");
+            Check("trae: plain-JSON storage still works", TraeProvider.ReadStorageAuth(plainStore).Item1 == "plain-jwt");
+
+            var usagePayload = J("{\"code\":0,\"user_entitlement_pack_list\":[{\"entitlement_base_info\":{\"product_type\":1,\"end_time\":" + (now.ToUnixTimeSeconds() + 15 * 86400) + ",\"quota\":{\"premium_model_fast_request_limit\":600}},\"usage\":{\"premium_model_fast_amount\":150},\"status\":1}]}");
+            var pu = TraeProvider.ParseUsage(usagePayload);
+            Check("trae: fast request window", pu.Item1.Count == 1 && pu.Item1[0].Label == "Fast requests"
+                && pu.Item1[0].PercentText == "25%" && pu.Item1[0].Detail == "150 / 600", pu.Item1.Count > 0 ? pu.Item1[0].Detail : "none");
+            Check("trae: plan from product_type", pu.Item3 == "Pro");
+            Check("trae: renews row", pu.Item2.Any(r => r.Label == "Renews"));
+            var unlimited = J("{\"user_entitlement_pack_list\":[{\"entitlement_base_info\":{\"product_type\":6,\"quota\":{\"premium_model_fast_request_limit\":-1}},\"usage\":{\"premium_model_fast_amount\":5}}]}");
+            var uu = TraeProvider.ParseUsage(unlimited);
+            Check("trae: unlimited fast requests", uu.Item1[0].Detail == "unlimited" && uu.Item1[0].Percent == 0.0 && uu.Item3 == "Ultra");
+            var ps = TraeProvider.ParsePayStatus(J("{\"code\":0,\"user_pay_identity_str\":\"Pro+\",\"detail\":{\"subscription_renew_time\":" + (now.ToUnixTimeSeconds() + 30 * 86400) + "}}"));
+            Check("trae: pay status plan and renew", ps.Item1 == "Pro+" && ps.Item2 != null);
+
+            var seenTrae = new List<string>();
+            Http.Send = req =>
+            {
+                seenTrae.Add(req.Url + "|" + req.Headers["Authorization"]);
+                if (req.Url.EndsWith(TraeProvider.EntUsagePath)) return new HttpReply(200, Json.Write(usagePayload));
+                if (req.Url.EndsWith(TraeProvider.PayStatusPath)) return new HttpReply(200, "{\"code\":0,\"user_pay_identity_str\":\"Pro\"}");
+                return new HttpReply(404, "{}");
+            };
+            var tp = new TraeProvider(new Config())
+            {
+                StoragePathsOverride = () => new List<Tuple<string, bool, string>> { Tuple.Create(storePath, true, "TRAE CN") },
+            };
+            var tr = tp.Fetch();
+            Check("trae connects (CN host, Cloud-IDE-JWT)", tr.Ok && tr.Source == "api.trae.cn"
+                && seenTrae[0].Contains("Cloud-IDE-JWT trae-jwt-123"), tr.Status + " | " + (seenTrae.Count > 0 ? seenTrae[0] : ""));
+            Check("trae: fast window in panel", tr.SortedWindows()[0].Label == "Fast requests" && tr.Plan == "Pro");
+            Check("trae: account and subscription tab", tr.Account == "me@trae.cn" && tr.Billing == "subscription");
+            Check("trae: survives the cache", ProviderResult.FromCache(Json.ParseObject(Json.Write(tr.ToCache()))).Plan == "Pro");
+
+            Console.WriteLine("--- Doubao ---");
+            // A real Chromium-format cookie DB (page_size 512, 62 rows: a v10
+            // sessionid, a v24 host-hash-prefixed cookie, and enough rows to
+            // force an interior b-tree page), key = bytes 0..31.
+            const string cookieDbB64 = "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bnZhbC8nDwcBMxMdDA9wLnNpdGUxMi5leGFtcGxlLmNvbWMxMnBsYWludmFsLycOBwEzEx0MD28uc2l0ZTExLmV4YW1wbGUuY29tYzExcGxhaW52YWwvJw0HATMTHQwPbi5zaXRlMTAuZXhhbXBsZS5jb21jMTBwbGFpbnZhbC8mDAcBMRMdDA9tLnNpdGU5LmV4YW1wbGUuY29tYzA5cGxhaW52YWwvJgsHATETHQwPbC5zaXRlOC5leGFtcGxlLmNvbWMwOHBsYWludmFsLyYKBwExEx0MD2suc2l0ZTcuZXhhbXBsZS5jb21jMDdwbGFpbnZhbC8NAAAACwA8AAHXAa4BhQFcATMBCgDhALgAjwBmADwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAoHwcCMxMdDA8AgC5zaXRlMjguZXhhbXBsZS5jb21jMjhwbGFpbnZhbC8nHgcBMxMdDA9/LnNpdGUyNy5leGFtcGxlLmNvbWMyN3BsYWludmFsLycdBwEzEx0MD34uc2l0ZTI2LmV4YW1wbGUuY29tYzI2cGxhaW52YWwvJxwHATMTHQwPfS5zaXRlMjUuZXhhbXBsZS5jb21jMjVwbGFpbnZhbC8nGwcBMxMdDA98LnNpdGUyNC5leGFtcGxlLmNvbWMyNHBsYWludmFsLycaBwEzEx0MD3suc2l0ZTIzLmV4YW1wbGUuY29tYzIzcGxhaW52YWwvJxkHATMTHQwPei5zaXRlMjIuZXhhbXBsZS5jb21jMjJwbGFpbnZhbC8nGAcBMxMdDA95LnNpdGUyMS5leGFtcGxlLmNvbWMyMXBsYWludmFsLycXBwEzEx0MD3guc2l0ZTIwLmV4YW1wbGUuY29tYzIwcGxhaW52YWwvJxYHATMTHQwPdy5zaXRlMTkuZXhhbXBsZS5jb21jMTlwbGFpbnZhbC8nFQcBMxMdDA92LnNpdGUxOC5leGFtcGxlLmNvbWMxOHBsYWludmFsLw0AAAALADIAAdYBrAGCAVgBLgEEANoAsACGAFwAMgAAAAAAAAAAAAAAAAAAAAAAAAAAKCoHAjMTHQwPAIsuc2l0ZTM5LmV4YW1wbGUuY29tYzM5cGxhaW52YWwvKCkHAjMTHQwPAIouc2l0ZTM4LmV4YW1wbGUuY29tYzM4cGxhaW52YWwvKCgHAjMTHQwPAIkuc2l0ZTM3LmV4YW1wbGUuY29tYzM3cGxhaW52YWwvKCcHAjMTHQwPAIguc2l0ZTM2LmV4YW1wbGUuY29tYzM2cGxhaW52YWwvKCYHAjMTHQwPAIcuc2l0ZTM1LmV4YW1wbGUuY29tYzM1cGxhaW52YWwvKCUHAjMTHQwPAIYuc2l0ZTM0LmV4YW1wbGUuY29tYzM0cGxhaW52YWwvKCQHAjMTHQwPAIUuc2l0ZTMzLmV4YW1wbGUuY29tYzMzcGxhaW52YWwvKCMHAjMTHQwPAIQuc2l0ZTMyLmV4YW1wbGUuY29tYzMycGxhaW52YWwvKCIHAjMTHQwPAIMuc2l0ZTMxLmV4YW1wbGUuY29tYzMxcGxhaW52YWwvKCEHAjMTHQwPAIIuc2l0ZTMwLmV4YW1wbGUuY29tYzMwcGxhaW52YWwvKCAHAjMTHQwPAIEuc2l0ZTI5LmV4YW1wbGUuY29tYzI5cGxhaW52YWwvDQAAAAsAMgAB1gGsAYIBWAEuAQQA2gCwAIYAXAAyAAAAAAAAAAAAAAAAAAAAAAAAAAAoNQcCMxMdDA8Ali5zaXRlNTAuZXhhbXBsZS5jb21jNTBwbGFpbnZhbC8oNAcCMxMdDA8AlS5zaXRlNDkuZXhhbXBsZS5jb21jNDlwbGFpbnZhbC8oMwcCMxMdDA8AlC5zaXRlNDguZXhhbXBsZS5jb21jNDhwbGFpbnZhbC8oMgcCMxMdDA8Aky5zaXRlNDcuZXhhbXBsZS5jb21jNDdwbGFpbnZhbC8oMQcCMxMdDA8Aki5zaXRlNDYuZXhhbXBsZS5jb21jNDZwbGFpbnZhbC8oMAcCMxMdDA8AkS5zaXRlNDUuZXhhbXBsZS5jb21jNDVwbGFpbnZhbC8oLwcCMxMdDA8AkC5zaXRlNDQuZXhhbXBsZS5jb21jNDRwbGFpbnZhbC8oLgcCMxMdDA8Ajy5zaXRlNDMuZXhhbXBsZS5jb21jNDNwbGFpbnZhbC8oLQcCMxMdDA8Aji5zaXRlNDIuZXhhbXBsZS5jb21jNDJwbGFpbnZhbC8oLAcCMxMdDA8AjS5zaXRlNDEuZXhhbXBsZS5jb21jNDFwbGFpbnZhbC8oKwcCMxMdDA8AjC5zaXRlNDAuZXhhbXBsZS5jb21jNDBwbGFpbnZhbC8NAAAACQCGAAHWAawBggFYAS4BBADaALAAhgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACg+BwIzEx0MDwCfLnNpdGU1OS5leGFtcGxlLmNvbWM1OXBsYWludmFsLyg9BwIzEx0MDwCeLnNpdGU1OC5leGFtcGxlLmNvbWM1OHBsYWludmFsLyg8BwIzEx0MDwCdLnNpdGU1Ny5leGFtcGxlLmNvbWM1N3BsYWludmFsLyg7BwIzEx0MDwCcLnNpdGU1Ni5leGFtcGxlLmNvbWM1NnBsYWludmFsLyg6BwIzEx0MDwCbLnNpdGU1NS5leGFtcGxlLmNvbWM1NXBsYWludmFsLyg5BwIzEx0MDwCaLnNpdGU1NC5leGFtcGxlLmNvbWM1NHBsYWludmFsLyg4BwIzEx0MDwCZLnNpdGU1My5leGFtcGxlLmNvbWM1M3BsYWludmFsLyg3BwIzEx0MDwCYLnNpdGU1Mi5leGFtcGxlLmNvbWM1MnBsYWludmFsLyg2BwIzEx0MDwCXLnNpdGU1MS5leGFtcGxlLmNvbWM1MXBsYWludmFsLw==";
+            {
+                var dbPath = Path.Combine(Paths.AppDir, "cookies-test.db");
+                File.WriteAllBytes(dbPath, Convert.FromBase64String(cookieDbB64));
+                var cookieKey = Enumerable.Range(0, 32).Select(i => (byte)i).ToArray();
+                var jar = ChromiumCookies.ReadCookies(dbPath, "doubao.com", cookieKey);
+                Check("sqlite: reads a v10 cookie from a real Chromium DB", jar.TryGetValue("sessionid", out var sid) && sid == "sk-cookie-token",
+                    jar.ContainsKey("sessionid") ? jar["sessionid"] : "(" + jar.Count + " cookies)");
+                var other = ChromiumCookies.ReadCookies(dbPath, "other.com", cookieKey);
+                Check("sqlite: strips the v24 host-hash prefix", other.TryGetValue("csrf", out var cv) && cv == "csrf-val",
+                    other.ContainsKey("csrf") ? other["csrf"] : "missing");
+                using (var sq = Sqlite.Open(dbPath))
+                {
+                    var rows = sq.ReadTable(sq.Tables()["cookies"].RootPage).Count();
+                    Check("sqlite: walks interior b-tree pages (62 rows)", rows == 62, rows.ToString());
+                }
+            }
+
+            var dprof = DoubaoProvider.ParseProfile(J("{\"data\":{\"profile_brief\":{\"nickname\":\"\\u5c0f\\u8c46\",\"user_name\":\"doubao_user\",\"id\":42,\"vip_type\":2}}}"));
+            Check("doubao: account and plan from profile", dprof.Item1 == "\u5c0f\u8c46" && dprof.Item2 == "Pro", dprof.Item1 + "/" + dprof.Item2);
+            var dfree = DoubaoProvider.ParseProfile(J("{\"data\":{\"profile_brief\":{\"nickname\":\"Free User\",\"is_vip\":false}}}"));
+            Check("doubao: free account has no plan", dfree.Item1 == "Free User" && dfree.Item2 == null, dfree.Item1 + "/" + (dfree.Item2 ?? "null"));
+            var drem = DoubaoProvider.ParseProfile(J("{\"data\":{\"profile_brief\":{\"nickname\":\"x\"},\"benefit\":{\"remaining\":88}}}"));
+            Check("doubao: a remaining count is shown if present", drem.Item3.Any(r => r.Label == "Remaining" && r.Value == "88"));
+            var seenDoubao = new List<string>();
+            Http.Send = req =>
+            {
+                seenDoubao.Add(req.Headers.TryGetValue("Cookie", out var ck) ? ck : "");
+                if (req.Url == DoubaoProvider.ProfileUrl)
+                    return new HttpReply(200, "{\"data\":{\"profile_brief\":{\"nickname\":\"\\u5c0f\\u8c46\",\"vip_type\":2}}}");
+                return new HttpReply(404, "{}");
+            };
+            var dbp = new DoubaoProvider(new Config()) { SessionOverride = () => Tuple.Create("sk-cookie", new List<string>()) };
+            var dbr = dbp.Fetch();
+            Check("doubao connects", dbr.Ok && dbr.Source == "www.doubao.com/alice/profile/self", dbr.Status);
+            Check("doubao: sends the sessionid cookie", seenDoubao.Any(c => c.Contains("sessionid=sk-cookie")), string.Join("|", seenDoubao));
+            Check("doubao: account, plan, subscription tab", dbr.Account == "\u5c0f\u8c46" && dbr.Plan == "Pro" && dbr.Billing == "subscription");
+            Check("doubao: survives the cache", ProviderResult.FromCache(Json.ParseObject(Json.Write(dbr.ToCache()))).Plan == "Pro");
+            Http.Send = req => new HttpReply(401, "<html>login</html>");
+            var d401 = new DoubaoProvider(new Config()) { SessionOverride = () => Tuple.Create("expired", new List<string>()) }.Fetch();
+            Check("doubao: expired login explained", !d401.Ok && d401.Status.ToLowerInvariant().Contains("expired"), d401.Status);
 
             Console.WriteLine("--- DeepSeek ---");
             Check("jsonc comments and trailing commas", Json.Write(Json.ParseObject(DeepSeekProvider.StripJsonc(

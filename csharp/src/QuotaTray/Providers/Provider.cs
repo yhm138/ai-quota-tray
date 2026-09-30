@@ -69,7 +69,7 @@ namespace QuotaTray.Providers
         public static List<Provider> Build(Config config)
         {
             var all = new List<Provider> { new ClaudeProvider(config), new CodexProvider(config), new AntigravityProvider(config),
-                new DeepSeekProvider(config) };
+                new GeminiProvider(config), new TraeProvider(config), new DoubaoProvider(config), new DeepSeekProvider(config) };
             return all.Where(p => p.Enabled).ToList();
         }
 

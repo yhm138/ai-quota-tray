@@ -49,10 +49,14 @@ per product. Click it and the panel (screenshot above) shows, per product:
 - **Banked limit resets**: the one-time resets Anthropic and OpenAI hand out,
   how many are unused and when the first one expires. A notification reminds
   you once a day while any are unused.
-- **Two tabs**: *Subscriptions* (Claude, Codex, Antigravity) and *Pay as you
-  go*, where the **DeepSeek API balance** of the key that OpenCode or DeepSeek
-  Harness (dsh) keeps is shown: total, topped up and granted, amber when it
-  runs low. Each tab scrolls when its cards do not fit on the screen.
+- **More products**: **Gemini CLI** (per-model quota and tier), **TRAE (Trae
+  CN)** (plan and fast-request usage), and the **Doubao** desktop client
+  (signed-in account and membership).
+- **Two tabs**: *Subscriptions* (Claude, Codex, Antigravity, Gemini CLI, TRAE,
+  Doubao) and *Pay as you go*, where the **DeepSeek API balance** of the key
+  that OpenCode or DeepSeek Harness (dsh) keeps is shown: total, topped up and
+  granted, amber when it runs low. Each tab scrolls when its cards do not fit
+  on the screen.
 
 No sign-in. It reads credentials that already exist on your machine from
 whichever tool put them there (including Claude Desktop's own login), and
@@ -247,6 +251,38 @@ process, then calls the server's local Connect RPC `GetUserStatus` for the
 prompt-credit balance and each model's remaining quota. Nothing leaves your
 machine. **The IDE has to be open**, otherwise the panel says "IDE not running".
 
+### Gemini CLI
+
+Gemini CLI signs in with Google and keeps the tokens in
+`~/.gemini/oauth_creds.json` (`GEMINI_CLI_HOME` and each WSL distro too).
+QuotaTray reads the tier and the per-model quota from Google's Code Assist API
+(`cloudcode-pa.googleapis.com` — `loadCodeAssist` and `retrieveUserQuota`),
+the same calls the CLI makes, using the access token on disk. It does not
+refresh the token itself (the CLI does that on its own use, so the file is
+usually current, and QuotaTray embeds no OAuth secret); a clearly expired
+token is reported so you can run `gemini` once. One page per Google account;
+tokens go to Google only.
+
+### TRAE (Trae CN)
+
+TRAE keeps its Cloud-IDE JWT in `%APPDATA%\Trae CN\User\globalStorage\storage.json`
+(under `iCubeAuthInfo://...`), as plain JSON or a base64 "byte crypto" blob
+(AES-128-CBC). QuotaTray decodes it, then calls TRAE's pay endpoints
+(`api.trae.cn/trae/api/v1/pay/ide_user_pay_status` and `ide_user_ent_usage`,
+header `Cloud-IDE-JWT`) for the plan and the fast-request usage, the same
+numbers the IDE's usage panel shows. Trae CN and international Trae, Windows
+and each WSL user.
+
+### Doubao
+
+Doubao's desktop client is an Electron app for www.doubao.com. QuotaTray reads
+its `sessionid` cookie from the app's cookie store (the same OSCrypt/DPAPI +
+AES-GCM scheme as Claude Desktop) and calls `/alice/profile/self` for the
+signed-in account and membership. Doubao does **not** publish a remaining-quota
+API — its per-day points show only inside the app's own 配额中心 (quota center) —
+so this card shows the account and plan, not a usage bar. Paste a `session_id`
+into config.json to override the cookie read.
+
 ### DeepSeek (pay as you go)
 
 DeepSeek bills API keys against a prepaid balance, so this card sits on the
@@ -370,7 +406,7 @@ Log: `%APPDATA%\QuotaTray\quota-tray.log` · Snapshot: `%APPDATA%\QuotaTray\diag
 
 - Credentials are used only in HTTP `Authorization` / `Cookie` headers, never logged and never sent anywhere else. Tokens are only read, never refreshed, so your Claude Code / Claude Desktop logins stay untouched.
 - One thing is written to disk: the last working Claude Desktop session cookie, DPAPI-encrypted to your Windows account, in `%APPDATA%\QuotaTray\claude-session.bin` (used when Claude Desktop keeps its cookie file locked). Delete it any time.
-- Hosts contacted: `api.anthropic.com`, `claude.ai`, `chatgpt.com`, `api.deepseek.com` and `127.0.0.1` for quotas; `api.github.com`, `github.com` and `raw.githubusercontent.com` for the daily update check (turn off with `check_updates`).
+- Hosts contacted: `api.anthropic.com`, `claude.ai`, `chatgpt.com`, `api.deepseek.com`, `cloudcode-pa.googleapis.com`, `api.trae.cn`, `www.doubao.com` and `127.0.0.1` for quotas; `api.github.com`, `github.com` and `raw.githubusercontent.com` for the daily update check (turn off with `check_updates`).
 - Every quota call lives in the files under `python/quota_tray/providers/` (C#: `csharp/src/QuotaTray/Providers/`), the update check in `python/quota_tray/updater.py`, so the whole surface is short enough to read.
 - `probe.bat` redacts tokens and cookies before writing its report, but `_probe.txt` still contains local paths — do not paste it publicly without a look.
 
@@ -427,7 +463,8 @@ MIT — see [LICENSE](LICENSE).
 - **账号信息**：套餐与状态（Claude 套餐已取消会显示为黄色）、订阅开始或续费日期、Claude 额外用量、Codex 积分。
 - **多账号**：Claude Code 和 Claude Desktop（或 Windows 与 WSL 里的 Codex）登录的是不同账号时，卡片上会出现 ‹ › 按钮，每个账号一页。
 - **可用的额度重置**：Anthropic 和 OpenAI 发放的一次性重置，还剩几次、最早哪天过期。只要还有没用的，每天会弹一次提醒。
-- **两个标签页**：*Subscriptions*（订阅制：Claude、Codex、Antigravity）和 *Pay as you go*（按量计费）。按量计费页显示 OpenCode 或 DeepSeek Harness（dsh）里保存的 **DeepSeek API Key 的余额**：总余额、充值部分和赠送部分，余额偏低时变黄。卡片太多、屏幕放不下时，每个标签页都可以滚动。
+- **更多产品**：**Gemini CLI**（各模型额度和套餐档位）、**TRAE（Trae CN）**（套餐和 fast request 用量）、**豆包**桌面客户端（登录账号和会员）。
+- **两个标签页**：*Subscriptions*（订阅制：Claude、Codex、Antigravity、Gemini CLI、TRAE、豆包）和 *Pay as you go*（按量计费）。按量计费页显示 OpenCode 或 DeepSeek Harness（dsh）里保存的 **DeepSeek API Key 的余额**：总余额、充值部分和赠送部分，余额偏低时变黄。卡片太多、屏幕放不下时，每个标签页都可以滚动。
 
 **不需要登录**。它读取你机器上各个工具已经写好的凭据（包括 Claude Desktop 自己的登录），而且每个产品都有**多条兜底路径**，某一条不通时自动换下一条。新版本在托盘菜单里一键安装。
 
@@ -568,6 +605,18 @@ Codex 会**跨来源合并**，而不是拿到第一个结果就停：线上接�
 
 Antigravity 内部跑一个语言服务器，启动参数里带 `--csrf_token`，并在 `127.0.0.1` 上监听随机端口。QuotaTray 从运行中的进程读出 token 和端口，再调它本地的 Connect RPC `GetUserStatus`，拿到 prompt credits 余额和每个模型的剩余额度。**数据不出本机**。**IDE 必须开着**，关掉后面板会显示 "IDE not running"。
 
+### Gemini CLI
+
+Gemini CLI 用 Google 账号登录，令牌存在 `~/.gemini/oauth_creds.json`（也支持 `GEMINI_CLI_HOME` 和各 WSL 发行版）。QuotaTray 直接用磁盘上的 access token，从 Google 的 Code Assist 接口（`cloudcode-pa.googleapis.com` 的 `loadCodeAssist`、`retrieveUserQuota`）读取套餐档位和各模型的剩余额度——和 CLI 自己调用的是同一批接口。它不自己刷新令牌（CLI 运行时会刷新，所以文件通常是新的；QuotaTray 也就不需要内置任何 OAuth 密钥）；令牌明显过期时会提示你运行一次 `gemini`。每个 Google 账号一页；令牌只发给 Google。
+
+### TRAE（Trae CN）
+
+TRAE 把它的 Cloud-IDE JWT 存在 `%APPDATA%\Trae CN\User\globalStorage\storage.json`（键名以 `iCubeAuthInfo://` 开头），可能是明文 JSON，也可能是 base64 的 “byte crypto” 密文（AES-128-CBC）。QuotaTray 解出来后调 TRAE 的付费接口（`api.trae.cn` 的 `ide_user_pay_status`、`ide_user_ent_usage`，请求头 `Cloud-IDE-JWT`）拿套餐和 fast request 用量——和 IDE 里用量面板显示的是同一份数字。国内版 Trae CN 和国际版 Trae、Windows 和各 WSL 用户都会读。
+
+### 豆包
+
+豆包桌面客户端是 www.doubao.com 的 Electron 应用。QuotaTray 从它的 cookie 库里读 `sessionid` cookie（和 Claude Desktop 一样的 OSCrypt/DPAPI + AES-GCM 方案），再调 `/alice/profile/self` 拿登录账号和会员信息。豆包**没有**公开的“剩余额度”接口——每天的次数只在客户端自己的“配额中心”里显示——所以这张卡片显示账号和套餐，没有用量条。可以在 config.json 里手填 `session_id` 覆盖 cookie 读取。
+
 ### DeepSeek（按量计费）
 
 DeepSeek 的 API 是预充值按量扣费，没有周期额度，所以它放在 *Pay as you go* 标签页，显示 `api.deepseek.com/user/balance` 返回的余额。Key 从已经保存它的工具里读取：
@@ -634,7 +683,7 @@ Windows 和每个 WSL 发行版都会搜索。每个不同的 Key 单独一页�
 
 - 凭据只用在 HTTP 的 `Authorization` / `Cookie` 头里，不写日志、不发给任何第三方。只读取 token，从不刷新，不会影响你的 Claude Code / Claude Desktop 登录
 - 唯一落盘的是最近一次可用的 Claude Desktop 会话 cookie，用 DPAPI 绑定你的 Windows 账户加密，存在 `%APPDATA%\QuotaTray\claude-session.bin`（Claude Desktop 锁住 cookie 文件时使用），可随时删除
-- 额度查询只连 `api.anthropic.com`、`claude.ai`、`chatgpt.com`、`api.deepseek.com`、`127.0.0.1`；每日检查更新连 `api.github.com`、`github.com`、`raw.githubusercontent.com`（可用 `check_updates` 关闭）
+- 额度查询只连 `api.anthropic.com`、`claude.ai`、`chatgpt.com`、`api.deepseek.com`、`cloudcode-pa.googleapis.com`、`api.trae.cn`、`www.doubao.com`、`127.0.0.1`；每日检查更新连 `api.github.com`、`github.com`、`raw.githubusercontent.com`（可用 `check_updates` 关闭）
 - 额度请求都在 `python/quota_tray/providers/`（C# 版在 `csharp/src/QuotaTray/Providers/`）里，更新检查在 `python/quota_tray/updater.py`，整个面很小，可以自己读完
 - `probe.bat` 生成报告时会脱敏 token 和 cookie，但 `_probe.txt` 里仍有本机路径，公开粘贴前先看一眼
 

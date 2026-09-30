@@ -1,5 +1,25 @@
 # Changelog
 
+## v1.6.0
+
+- **Three more products** (both editions):
+  - **Gemini CLI**: reads the Google OAuth token in
+    `~/.gemini/oauth_creds.json`, and shows the per-model quota from Google's
+    Code Assist API and the plan/tier (the CLI refreshes the token on its own
+    use, so QuotaTray does not, and embeds no OAuth secret)
+  - **TRAE (Trae CN)**: reads TRAE's Cloud-IDE JWT from
+    `storage.json` (decoding the encrypted "byte crypto" blob), and shows
+    the plan and the fast-request usage from `api.trae.cn`
+  - **Doubao** desktop client: reads the `sessionid` cookie from the app's
+    cookie store and shows the signed-in account and membership. Doubao
+    publishes no remaining-quota API (its points show only in the app's own
+    quota page), so there is no usage bar
+- Each reads a login that already exists on the machine (Windows and WSL),
+  one page per account, and only ever talks to that product's own host
+- The C# edition gained a small managed read-only SQLite reader, so it
+  reads the Electron cookie store and still ships as one exe with no native
+  library
+
 ## v1.5.2
 
 - **Pay as you go: the API key is one hover or click away.** Each DeepSeek

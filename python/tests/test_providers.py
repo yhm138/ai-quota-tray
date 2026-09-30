@@ -3,7 +3,10 @@ session logs and process output. No network, no Windows required.
 """
 from __future__ import annotations
 
+import base64
 import json
+import json as _json_mod
+json_dumps = _json_mod.dumps
 import sys
 import tempfile
 import types
@@ -1039,6 +1042,187 @@ t = datetime(2026, 9, 13, 12, 0, tzinfo=timezone.utc)
 check("countdown 3d 2h", humanize_delta(t + timedelta(days=3, hours=2), now=t) == "3d 2h")
 check("countdown 4h 12m", humanize_delta(t + timedelta(hours=4, minutes=12), now=t) == "4h 12m")
 check("countdown resetting", humanize_delta(t - timedelta(minutes=1), now=t) == "resetting")
+
+# ------------------------------------------------------------------ Gemini CLI
+
+print("\n--- Gemini CLI ---")
+from quota_tray.providers import gemini                           # noqa: E402
+
+tok, err = gemini.access_token({"access_token": "live", "expiry_date": (now_utc().timestamp() + 3600) * 1000})
+check("gemini: fresh token used as-is", tok == "live" and err is None)
+tok, err = gemini.access_token({"access_token": "old", "expiry_date": 1})
+check("gemini: expired token asks to run gemini", tok is None and "run `gemini`" in err, (tok, err))
+tok, err = gemini.access_token({})
+check("gemini: no token explained", tok is None and "no access token" in err, (tok, err))
+
+gid = base64.urlsafe_b64encode(json.dumps({"email": "me@gmail.com"}).encode()).decode().rstrip("=")
+load_payload = {"currentTier": {"id": "standard-tier", "name": "Standard"},
+                "cloudaicompanionProject": "proj-123"}
+quota_payload = {"buckets": [
+    {"modelId": "gemini-2.5-pro", "remainingFraction": 0.4, "remainingAmount": "600",
+     "tokenType": "REQUESTS", "resetTime": later_iso},
+    {"modelId": "gemini-2.5-flash", "remainingFraction": 1.0, "resetTime": later_iso}]}
+seen_bodies = []
+
+
+def gemini_post(url, headers=None, json=None, **_k):
+    seen_bodies.append((url, json))
+    if url.endswith(":loadCodeAssist"):
+        return FakeResp(load_payload)
+    if url.endswith(":retrieveUserQuota"):
+        return FakeResp(quota_payload)
+    return FakeResp({}, 404)
+
+
+gemini.session = lambda: fake_session(post=gemini_post)
+gemini.discover_credentials = lambda settings: (
+    [({"access_token": "t", "expiry_date": (now_utc().timestamp() + 3600) * 1000, "id_token": f"h.{gid}.s"},
+      "Gemini CLI")], [])
+gp = gemini.GeminiProvider(Config())
+gp.detect = lambda: True
+r = gp.fetch()
+check("gemini connects", r.ok and r.source == "cloudcode-pa.googleapis.com", r.status)
+check("gemini: two model windows", [w.label for w in r.sorted_windows()] == ["Gemini 2.5 Pro", "Gemini 2.5 Flash"],
+      [w.label for w in r.sorted_windows()])
+check("gemini: 2.5 pro is 60% used", r.sorted_windows()[0].percent_text == "60%" and r.sorted_windows()[0].detail == "600 left (requests)",
+      (r.sorted_windows()[0].percent_text, r.sorted_windows()[0].detail))
+check("gemini: flash unused", r.sorted_windows()[1].percent == 0.0)
+check("gemini: plan and account", r.plan == "Standard" and r.account == "me@gmail.com", (r.plan, r.account))
+check("gemini: quota query used the project id", seen_bodies[-1] == (gemini.ENDPOINT + ":retrieveUserQuota", {"project": "proj-123"}),
+      seen_bodies[-1])
+check("gemini: subscription tab", r.billing == "subscription")
+check("gemini: survives the cache", ProviderResult.from_cache(json.loads(json_dumps(r.to_cache()))).plan == "Standard")
+
+
+def gemini_401(url, headers=None, json=None, **_k):
+    return FakeResp({}, 401)
+
+
+gemini.session = lambda: fake_session(post=gemini_401)
+r = gemini.GeminiProvider(Config()).fetch()
+check("gemini: 401 is explained", not r.ok and "sign in to Gemini again" in r.status, r.status)
+
+# ------------------------------------------------------------------ TRAE
+
+print("\n--- TRAE ---")
+from quota_tray.providers import trae                             # noqa: E402
+from cryptography.hazmat.primitives.ciphers import Cipher as _Cipher, algorithms as _algs, modes as _modes  # noqa: E402
+
+
+def _trae_encrypt(plaintext, private=False):
+    import hashlib as _h
+    import os as _os
+    key_material = _os.urandom(32)
+    merged = _h.sha512(_h.sha512(key_material).digest() + trae._salt(private)).digest()
+    enc = _Cipher(_algs.AES(merged[:16]), _modes.CBC(merged[16:32])).encryptor()
+    payload = _h.sha512(plaintext).digest() + plaintext
+    pad = 16 - (len(payload) % 16)
+    padded = payload + bytes([pad]) * pad
+    ct = enc.update(padded) + enc.finalize()
+    header = trae._PREFIX_AES_PRIVATE if private else trae._PREFIX_AES
+    return (trae._PREFIX_AES if not private else header)[:0] + header + key_material + ct
+
+
+_auth_doc = {"accessToken": "trae-jwt-123", "email": "me@trae.cn"}
+_blob = __import__("base64").b64encode(_trae_encrypt(json.dumps(_auth_doc).encode())).decode()
+check("trae: byte-crypto round trip", trae.byte_crypto_decrypt(__import__("base64").b64decode(_blob)) is not None
+      and json.loads(trae.byte_crypto_decrypt(__import__("base64").b64decode(_blob))) == _auth_doc)
+check("trae: tampered blob rejected",
+      trae.byte_crypto_decrypt(__import__("base64").b64decode(_blob)[:-1] + b"\x00") is None)
+
+_store = Path(tempfile.mkdtemp()) / "storage.json"
+_store.write_text(json.dumps({"iCubeAuthInfo://icube.cloudide": _blob,
+                              "iCubeAuthInfo://usertag": "ignored"}), encoding="utf-8")
+tok, mail = trae.read_storage_auth(_store)
+check("trae: token and email from storage.json", tok == "trae-jwt-123" and mail == "me@trae.cn", (tok, mail))
+_plain_store = Path(tempfile.mkdtemp()) / "storage.json"
+_plain_store.write_text(json.dumps({"iCubeAuthInfo://icube.cloudide": json.dumps({"token": "plain-jwt"})}),
+                        encoding="utf-8")
+check("trae: plain-JSON storage still works", trae.read_storage_auth(_plain_store)[0] == "plain-jwt")
+
+usage_payload = {"code": 0, "user_entitlement_pack_list": [
+    {"entitlement_base_info": {"product_type": 1, "end_time": int((now_utc().timestamp() + 15 * 86400))},
+     "usage": {"premium_model_fast_amount": 150},
+     "product_extra_ignored": True,
+     "status": 1}]}
+usage_payload["user_entitlement_pack_list"][0]["entitlement_base_info"]["quota"] = {
+    "premium_model_fast_request_limit": 600}
+windows, rows, plan = trae.parse_usage(usage_payload)
+check("trae: fast request window", len(windows) == 1 and windows[0].label == "Fast requests"
+      and windows[0].percent_text == "25%" and windows[0].detail == "150 / 600", (windows and windows[0].__dict__))
+check("trae: plan from product_type", plan == "Pro", plan)
+check("trae: renews row", any(r.label == "Renews" for r in rows), rows)
+unlimited = {"user_entitlement_pack_list": [{"entitlement_base_info": {"product_type": 6,
+             "quota": {"premium_model_fast_request_limit": -1}}, "usage": {"premium_model_fast_amount": 5}}]}
+uw, _r, up = trae.parse_usage(unlimited)
+check("trae: unlimited fast requests", uw[0].detail == "unlimited" and uw[0].percent == 0.0 and up == "Ultra", (uw[0].__dict__, up))
+ps_plan, ps_row = trae.parse_pay_status({"code": 0, "user_pay_identity_str": "Pro+",
+    "detail": {"subscription_renew_time": int(now_utc().timestamp() + 30 * 86400)}})
+check("trae: pay status plan and renew", ps_plan == "Pro+" and ps_row is not None, (ps_plan, ps_row))
+
+seen_trae = []
+
+
+def trae_post(url, headers=None, json=None, **_k):
+    seen_trae.append((url, headers.get("Authorization")))
+    if url.endswith(trae.ENT_USAGE_PATH):
+        return FakeResp(usage_payload)
+    if url.endswith(trae.PAY_STATUS_PATH):
+        return FakeResp({"code": 0, "user_pay_identity_str": "Pro"})
+    return FakeResp({}, 404)
+
+
+trae.session = lambda: fake_session(post=trae_post)
+tp = trae.TraeProvider(Config())
+tp.detect = lambda: True
+tp._page_token = ("trae-jwt-123", "me@trae.cn")
+trae._storage_paths = lambda settings: [(_store, True, "TRAE CN")]
+r = tp.fetch()
+check("trae connects (CN host, Cloud-IDE-JWT)", r.ok and r.source == "api.trae.cn"
+      and seen_trae[0][1] == "Cloud-IDE-JWT trae-jwt-123", (r.status, seen_trae[:1]))
+check("trae: fast window in panel", r.sorted_windows()[0].label == "Fast requests" and r.plan == "Pro", (r.plan, [w.label for w in r.windows]))
+check("trae: account and subscription tab", r.account == "me@trae.cn" and r.billing == "subscription")
+check("trae: survives the cache", ProviderResult.from_cache(json.loads(json.dumps(r.to_cache()))).plan == "Pro")
+
+# ------------------------------------------------------------------ Doubao
+
+print("\n--- Doubao ---")
+from quota_tray.providers import doubao                           # noqa: E402
+
+acct, plan, rows = doubao.parse_profile({"data": {"profile_brief": {
+    "nickname": "\u5c0f\u8c46", "user_name": "doubao_user", "id": 42, "vip_type": 2}}})
+check("doubao: account and plan from profile", acct == "\u5c0f\u8c46" and plan == "Pro", (acct, plan))
+acct2, plan2, rows2 = doubao.parse_profile({"data": {"profile_brief": {"nickname": "Free User", "is_vip": False}}})
+check("doubao: free account has no plan", acct2 == "Free User" and plan2 is None, (acct2, plan2))
+_, _, rows3 = doubao.parse_profile({"data": {"profile_brief": {"nickname": "x"}, "benefit": {"remaining": 88}}})
+check("doubao: a remaining count is shown if present", any(r.label == "Remaining" and r.value == "88" for r in rows3), rows3)
+
+
+def doubao_get(url, headers=None, **_k):
+    check("doubao: sends the sessionid cookie", "sessionid=sk-cookie" in (headers or {}).get("Cookie", ""),
+          headers)
+    return FakeResp({"data": {"profile_brief": {"nickname": "\u5c0f\u8c46", "vip_type": 2}}})
+
+
+doubao.session = lambda: fake_session(get=doubao_get)
+dp = doubao.DoubaoProvider(Config({"providers": {"doubao": {"session_id": "sk-cookie"}}}))
+dp.detect = lambda: True
+r = dp.fetch()
+check("doubao connects", r.ok and r.source == "www.doubao.com/alice/profile/self", r.status)
+check("doubao: account, plan, subscription tab", r.account == "\u5c0f\u8c46" and r.plan == "Pro"
+      and r.billing == "subscription", (r.account, r.plan))
+check("doubao: says usage is in the app", "config" not in r.status.lower() and "central" not in r.status.lower(),
+      r.status)
+check("doubao: survives the cache", ProviderResult.from_cache(json.loads(json.dumps(r.to_cache()))).plan == "Pro")
+
+
+def doubao_401(url, headers=None, **_k):
+    return FakeResp("<html>login</html>", 401)
+
+
+doubao.session = lambda: fake_session(get=doubao_401)
+r = doubao.DoubaoProvider(Config({"providers": {"doubao": {"session_id": "expired"}}})).fetch()
+check("doubao: expired login explained", not r.ok and "expired" in r.status.lower(), r.status)
 
 # ------------------------------------------------------------------ DeepSeek
 
