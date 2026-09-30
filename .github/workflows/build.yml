@@ -90,17 +90,30 @@ jobs:
           }
 
       - name: Package
+        env:
+          REF: ${{ github.ref }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          SHA: ${{ github.sha }}
+        # Assets carry the version and architecture, e.g.
+        # QuotaTray-v1.3.2-windows-x64.exe, so downloads can be told apart.
         run: |
+          if ($env:REF -like "refs/tags/v*") { $ver = $env:REF_NAME }
+          elseif ($env:INPUT_VERSION) { $ver = $env:INPUT_VERSION }
+          else { $ver = "dev-" + $env:SHA.Substring(0, 7) }
+          $machine = python -c "import platform; print(platform.machine())"
+          $arch = @{ "AMD64" = "x64"; "x86_64" = "x64"; "ARM64" = "arm64"; "x86" = "x86" }[$machine]
+          if (-not $arch) { $arch = $machine.ToLower() }
+          $base = "QuotaTray-$ver-windows-$arch"
           New-Item -ItemType Directory -Force -Path release | Out-Null
-          Copy-Item dist\onefile\QuotaTray.exe release\QuotaTray.exe
-          Compress-Archive -Path dist\onedir\QuotaTray\* -DestinationPath release\QuotaTray-portable.zip
-          Get-FileHash release\QuotaTray.exe -Algorithm SHA256 |
-            ForEach-Object { "$($_.Hash.ToLower())  QuotaTray.exe" } |
-            Out-File -Encoding ascii release\SHA256SUMS.txt
-          Get-FileHash release\QuotaTray-portable.zip -Algorithm SHA256 |
-            ForEach-Object { "$($_.Hash.ToLower())  QuotaTray-portable.zip" } |
-            Out-File -Encoding ascii -Append release\SHA256SUMS.txt
-          Get-Content release\SHA256SUMS.txt
+          Copy-Item dist\onefile\QuotaTray.exe "release\$base.exe"
+          Compress-Archive -Path dist\onedir\QuotaTray\* -DestinationPath "release\$base-portable.zip"
+          $sums = "release\QuotaTray-$ver-SHA256SUMS.txt"
+          Get-ChildItem release -File | Where-Object { $_.Extension -ne ".txt" } | ForEach-Object {
+            "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)"
+          } | Out-File -Encoding ascii $sums
+          Get-ChildItem release | Format-Table Name, Length
+          Get-Content $sums
 
       - uses: actions/upload-artifact@v4
         with:
@@ -113,10 +126,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.version }}
         run: |
-          gh release create "$env:TAG" `
-            release\QuotaTray.exe `
-            release\QuotaTray-portable.zip `
-            release\SHA256SUMS.txt `
+          gh release create "$env:TAG" (Get-ChildItem release -File).FullName `
             --target "${{ github.sha }}" `
             --title "QuotaTray $env:TAG" `
             --generate-notes

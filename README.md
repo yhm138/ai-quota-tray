@@ -51,9 +51,12 @@ Download from the [latest release](../../releases/latest):
 
 | File | When to use it |
 |---|---|
-| `QuotaTray.exe` | Single file. Simplest. |
-| `QuotaTray-portable.zip` | Unzip and run `QuotaTray.exe` inside. Starts faster and is less likely to trip antivirus. |
-| `SHA256SUMS.txt` | Verify what you downloaded (see below). |
+| `QuotaTray-<version>-windows-x64.exe` | Single file. Simplest. Rename it to `QuotaTray.exe` if you like; updates keep whatever name it has. |
+| `QuotaTray-<version>-windows-x64-portable.zip` | Unzip and run `QuotaTray.exe` inside. Starts faster and is less likely to trip antivirus. |
+| `QuotaTray-<version>-SHA256SUMS.txt` | Verify what you downloaded (see below). |
+
+Every file carries the version and architecture, e.g.
+`QuotaTray-v1.3.2-windows-x64.exe`. Releases before v1.3.2 used plain names.
 
 Put it where it will live (for example `C:\Tools\QuotaTray\`) **before** the
 first run — the first launch writes that path into run-at-login.
@@ -70,8 +73,8 @@ first run — the first launch writes that path into run-at-login.
 Verify a download:
 
 ```powershell
-Get-FileHash .\QuotaTray.exe -Algorithm SHA256
-# compare with SHA256SUMS.txt from the same release
+Get-FileHash .\QuotaTray-v1.3.2-windows-x64.exe -Algorithm SHA256
+# compare with QuotaTray-v1.3.2-SHA256SUMS.txt from the same release
 ```
 
 ### Option 2 — from source
@@ -119,9 +122,12 @@ once a day (tray menu: *Remind me about unused resets*).
 ## Updating
 
 **From v1.1.0 on**, QuotaTray checks for a new release once a day. When one is
-out, right-click the tray icon and choose **Update to vX.Y.Z and restart**.
-It downloads the release, checks its SHA256, swaps the program in place and
-starts again. *Check for updates* in the same menu checks right away.
+out, right-click the tray icon and choose **Check for updates**, then
+**Update now** in the panel. From v1.3.2 the running copy does all the work
+itself and shows each step with a progress bar: check, download, verify the
+SHA256, install. Only when the new version is in place does it close and start
+it; if any step fails it keeps running and says why, with *Retry*. The new
+version confirms "Updated from vX to vY".
 
 **Coming from v1.0.x** (no update button yet), open PowerShell and paste:
 
@@ -330,9 +336,11 @@ MIT — see [LICENSE](LICENSE).
 
 | 文件 | 什么时候用 |
 |---|---|
-| `QuotaTray.exe` | 单文件，最省事 |
-| `QuotaTray-portable.zip` | 解压后运行里面的 `QuotaTray.exe`。启动更快，也更不容易被杀软误报 |
-| `SHA256SUMS.txt` | 校验下载的文件（见下） |
+| `QuotaTray-<版本>-windows-x64.exe` | 单文件，最省事。可以改名为 `QuotaTray.exe`，更新时会保留你的文件名 |
+| `QuotaTray-<版本>-windows-x64-portable.zip` | 解压后运行里面的 `QuotaTray.exe`。启动更快，也更不容易被杀软误报 |
+| `QuotaTray-<版本>-SHA256SUMS.txt` | 校验下载的文件（见下） |
+
+文件名都带版本号和架构，例如 `QuotaTray-v1.3.2-windows-x64.exe`（v1.3.2 之前的版本用的是不带版本号的旧文件名）。
 
 **第一次运行前**先把它放到最终位置（比如 `C:\Tools\QuotaTray\`）—— 首次启动会把当时的路径写进开机自启。
 
@@ -341,8 +349,8 @@ MIT — see [LICENSE](LICENSE).
 校验下载：
 
 ```powershell
-Get-FileHash .\QuotaTray.exe -Algorithm SHA256
-# 和同一个 Release 里的 SHA256SUMS.txt 对一下
+Get-FileHash .\QuotaTray-v1.3.2-windows-x64.exe -Algorithm SHA256
+# 和同一个 Release 里的 QuotaTray-v1.3.2-SHA256SUMS.txt 对一下
 ```
 
 ### 方式二：从源码运行
@@ -382,9 +390,10 @@ winget install Python.Python.3.12
 
 ## 更新
 
-**v1.1.0 起**，QuotaTray 每天自动检查一次新版本。有新版时，右键托盘图标，点
-**Update to vX.Y.Z and restart**：自动下载、校验 SHA256、原地替换并重启。
-菜单里的 *Check for updates* 可立即检查。
+**v1.1.0 起**，QuotaTray 每天自动检查一次新版本。有新版时，右键托盘图标点 *Check for updates*，
+再在面板里点 **Update now**。v1.3.2 起由正在运行的程序自己完成全部步骤并显示进度条：检查、下载、
+校验 SHA256、安装。新版本就位后才关闭旧版并启动新版；任何一步失败，旧版继续运行并显示原因和 *Retry*。
+新版启动后会提示"Updated from vX to vY"。
 
 **从 v1.0.x 升级**（旧版还没有更新按钮），打开 PowerShell 粘贴：
 

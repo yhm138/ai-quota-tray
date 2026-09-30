@@ -9,8 +9,8 @@ echo    Cut a QuotaTray release
 echo   ==================================================
 echo.
 echo   Pushing a version tag runs the GitHub Actions build, which
-echo   attaches QuotaTray.exe, QuotaTray-portable.zip and
-echo   SHA256SUMS.txt to the release.
+echo   attaches QuotaTray-vX-windows-x64.exe, the -portable.zip and
+echo   the SHA256SUMS file to the release.
 echo.
 
 set "PF=%ProgramFiles%"
@@ -223,8 +223,8 @@ if defined GH (
 
 echo.
 echo   When the build finishes, the release will carry:
-echo     QuotaTray.exe            single file
-echo     QuotaTray-portable.zip   folder build, starts faster, fewer AV hits
-echo     SHA256SUMS.txt           checksums for both
+echo     QuotaTray-vX-windows-x64.exe               single file
+echo     QuotaTray-vX-windows-x64-portable.zip      folder build, starts faster, fewer AV hits
+echo     QuotaTray-vX-SHA256SUMS.txt                checksums for both
 echo.
 pause

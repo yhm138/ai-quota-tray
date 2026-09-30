@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.3.2
+
+- **Updates run inside the running app, with progress.** *Update now* keeps
+  the current version running and shows each step with a progress bar:
+  check, download (MB and percent), SHA256 verification, install. Only when
+  the new version is in place does it close and start it, and the new
+  version confirms *Updated from vX to vY*. If any step fails, the running
+  version stays and shows the reason with *Retry*. The single-file build
+  renames its running exe to `.old` and puts the new one in its place (the
+  leftover is removed after the restart); the portable build unpacks beside
+  itself and is copied over right after it exits
+- **Release files carry the version and architecture**:
+  `QuotaTray-v1.3.2-windows-x64.exe`,
+  `QuotaTray-v1.3.2-windows-x64-portable.zip`,
+  `QuotaTray-v1.3.2-SHA256SUMS.txt`. Updating keeps whatever name the
+  installed exe has, and running copies are recognised under any
+  `QuotaTray*.exe` name
+
 ## v1.3.1
 
 - **Fixed: after *Update now* QuotaTray could disappear for good.** The app

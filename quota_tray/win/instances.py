@@ -18,7 +18,7 @@ from .proc import powershell_json
 log = logging.getLogger(__name__)
 
 _PS = (
-    "Get-CimInstance Win32_Process -Filter \"Name='QuotaTray.exe' OR Name='pythonw.exe' "
+    "Get-CimInstance Win32_Process -Filter \"Name LIKE 'QuotaTray%.exe' OR Name='pythonw.exe' "
     "OR Name='python.exe'\" | Select-Object ProcessId,Name,ExecutablePath,CommandLine "
     "| ConvertTo-Json -Compress"
 )
@@ -45,7 +45,8 @@ def parse_processes(rows, own_dir: Path, own_pids: set[int]) -> list[tuple[int, 
             continue
         name = str(row.get("Name") or "").lower()
         folder: Path | None = None
-        if name == "quotatray.exe" and row.get("ExecutablePath"):
+        # The exe may keep its download name, e.g. QuotaTray-v1.3.2-windows-x64.exe.
+        if name.startswith("quotatray") and name.endswith(".exe") and row.get("ExecutablePath"):
             folder = Path(row["ExecutablePath"]).parent
         else:
             m = _RUN_PYW.search(str(row.get("CommandLine") or ""))
