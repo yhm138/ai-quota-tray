@@ -51,6 +51,7 @@ DEFAULTS: dict[str, Any] = {
     "danger_percent": 90,                # red threshold
     "icon_style": "bars",                # bars | ring
     "check_updates": True,               # look for a new release once a day
+    "promote_tray_icon": True,           # Windows 11: show the icon, not under the ^ overflow
     "remind_unused_resets": True,        # daily notification about banked resets
     "reset_reminder_hour": 10,           # ...from this local hour on
     "update_repo": "yhm138/ai-quota-tray",
@@ -223,23 +224,60 @@ def acquire_single_instance() -> bool:
     return True
 
 
-def signal_running_instance() -> bool:
-    """Ask the QuotaTray that is already running to open its panel."""
+_ACK_EVENT = f"Local\\{APP_NAME}-shown"
+
+
+def signal_running_instance(wait: float = 0.0) -> str:
+    """Ask the QuotaTray that is already running to open its panel.
+
+    Returns "acked" when it answered within `wait` seconds (v1.3.6+ answer
+    once their panel is up), "sent" when it was asked but did not answer,
+    and "none" when nothing listens (an old version, or no copy at all).
+    """
     if sys.platform != "win32":
-        return False
+        return "none"
     import ctypes
     from ctypes import wintypes
 
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     kernel32.OpenEventW.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR]
     kernel32.OpenEventW.restype = wintypes.HANDLE
+    kernel32.CreateEventW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.BOOL, wintypes.LPCWSTR]
+    kernel32.CreateEventW.restype = wintypes.HANDLE
+    kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel32.ResetEvent.argtypes = [wintypes.HANDLE]
     EVENT_MODIFY_STATE = 0x0002
     handle = kernel32.OpenEventW(EVENT_MODIFY_STATE, False, _SHOW_EVENT)
     if not handle:
-        return False                              # an older version that doesn't listen
+        return "none"                             # an older version that doesn't listen
+    ack = kernel32.CreateEventW(None, False, False, _ACK_EVENT) if wait > 0 else None
     try:
-        return bool(kernel32.SetEvent(handle))
+        if ack:
+            kernel32.ResetEvent(ack)
+        if not kernel32.SetEvent(handle):
+            return "none"
+        if not ack:
+            return "sent"
+        return "acked" if kernel32.WaitForSingleObject(ack, int(wait * 1000)) == 0 else "sent"
     finally:
+        kernel32.CloseHandle(handle)
+        if ack:
+            kernel32.CloseHandle(ack)
+
+
+def acknowledge_show() -> None:
+    """Tell a new launch that asked us to show the panel that we are alive."""
+    if sys.platform != "win32":
+        return
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenEventW.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR]
+    kernel32.OpenEventW.restype = wintypes.HANDLE
+    handle = kernel32.OpenEventW(0x0002, False, _ACK_EVENT)
+    if handle:
+        kernel32.SetEvent(handle)
         kernel32.CloseHandle(handle)
 
 

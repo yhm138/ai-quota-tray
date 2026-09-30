@@ -15,6 +15,7 @@ from .config import (
     Config,
     DIAG_PATH,
     LOG_PATH,
+    acknowledge_show,
     acquire_single_instance,
     install_dir,
     listen_for_show,
@@ -185,6 +186,15 @@ class QuotaTrayApp:
 
     def _on_show(self, *_args) -> None:
         self._post(lambda: self.panel.show("usage"))
+
+    def _on_show_request(self) -> None:
+        """Another launch asked for the panel: show it, then answer, so that
+        launch knows this copy is alive (and does not replace it)."""
+        def show():
+            self.panel.show("usage")
+            acknowledge_show()
+
+        self._post(show)
 
     def _on_show_diag(self, *_args) -> None:
         self._post(lambda: self.panel.show("diagnostics"))
@@ -441,6 +451,14 @@ class QuotaTrayApp:
         lines.append(f"Config file: {CONFIG_PATH()}")
         lines.append(f"Log file:    {LOG_PATH()}")
         lines.append(f"Run at login: {'enabled' if autostart.is_enabled() else 'disabled'}")
+        try:
+            from .win import trayicon
+
+            present = trayicon.icon_present(getattr(self.icon, "_hwnd", None))
+        except Exception:                                       # noqa: BLE001
+            present = None
+        lines.append("Tray icon:    " + {True: "shown", False: "MISSING (being re-added)",
+                                         None: "unknown"}[present])
         lines.append(f"Launch cmd:   {autostart.launch_command()}")
         lines.append("")
         if not self.results:
@@ -498,7 +516,7 @@ class QuotaTrayApp:
         threading.Thread(target=self._run_tray, name="tray", daemon=True).start()
         threading.Thread(target=self._update_loop, name="update", daemon=True).start()
         threading.Thread(
-            target=listen_for_show, args=(self._on_show, self._stop), name="show", daemon=True
+            target=listen_for_show, args=(self._on_show_request, self._stop), name="show", daemon=True
         ).start()
         self.root.after(200, self._push_to_panel)
         self.root.mainloop()
@@ -507,12 +525,48 @@ class QuotaTrayApp:
         # If the tray loop dies, the process must not linger icon-less while
         # holding the single-instance lock: log it and exit the whole app.
         try:
-            self.icon.run()
+            self.icon.run(setup=self._tray_setup)
         except Exception:                                       # noqa: BLE001
             log.exception("the tray icon stopped unexpectedly")
         if not self._stop.is_set():
             log.error("tray icon is gone; quitting so a new launch can start cleanly")
             self.quit()
+
+    def _tray_setup(self, icon) -> None:
+        icon.visible = True
+        threading.Thread(target=self._tray_watchdog, name="tray-watchdog", daemon=True).start()
+
+    def _tray_watchdog(self) -> None:
+        """pystray adds the icon once and never checks. Make sure it is there
+        (re-add it when Explorer lost or refused it) and, on Windows 11, that
+        it is not tucked away under the ^ overflow."""
+        from .win import trayicon
+
+        exe = sys.executable if getattr(sys, "frozen", False) else None
+        promote = bool(self.config.get("promote_tray_icon", True)) and exe
+        checks = 0
+        while not self._stop.wait(3 if checks < 20 else 30):
+            checks += 1
+            hwnd = getattr(self.icon, "_hwnd", None)
+            present = trayicon.icon_present(hwnd)
+            if present is False:
+                log.warning("the tray icon is missing (check %d); adding it again", checks)
+                try:
+                    self.icon._show()                           # NIM_ADD
+                    self.icon.icon = self._icon_image()
+                except Exception:                               # noqa: BLE001
+                    log.debug("re-adding the tray icon failed", exc_info=True)
+            elif present and checks <= 3:
+                log.info("tray icon is in place")
+            if promote and present and checks <= 40:
+                # Explorer writes the per-icon entry a moment after the add.
+                try:
+                    how = trayicon.promote(exe)
+                except Exception as exc:                        # noqa: BLE001
+                    how = f"failed: {exc!r}"
+                if how != "no entry yet":
+                    log.info("tray icon visibility: %s", how)
+                    promote = False
 
     def quit(self, *_args) -> None:
         self._stop.set()
@@ -660,25 +714,26 @@ def run_update() -> int:
     return 0
 
 
-def _retire_other_copies() -> int:
-    """Stop QuotaTray copies that run from another folder (an old install).
-    Returns how many were stopped. Never blocks for long."""
+def _retire_other_copies(include_own_dir: bool = False) -> int:
+    """Stop QuotaTray copies that run from another folder (an old install),
+    or from anywhere with include_own_dir. Returns how many were stopped."""
     from .win import instances
 
     stopped = 0
-    for pid, folder in instances.other_copies(install_dir()):
+    for pid, folder in instances.other_copies(install_dir(), include_own_dir=include_own_dir):
         ok, how = instances.stop(pid)
         log.info("old copy in %s (pid %s): %s", folder, pid, how)
         stopped += ok
     return stopped
 
 
-def _take_over() -> bool:
-    """A v1.1.3+ copy holds the lock. If it runs from a different folder,
-    the user just started this one on purpose: stop that one and take over."""
+def _take_over(include_own_dir: bool = False) -> bool:
+    """A v1.1.3+ copy holds the lock. If it runs from a different folder
+    (or does not respond), the user just started this one on purpose: stop
+    that one and take over."""
     import time
 
-    if not _retire_other_copies():
+    if not _retire_other_copies(include_own_dir):
         return False
     for _ in range(10):
         if acquire_single_instance():
@@ -778,17 +833,25 @@ def _main(argv: list[str]) -> int:
     log.info("launch: v%s from %s, args %s", __version__, install_dir(), argv or "none")
     if not acquire_single_instance():
         if "--no-takeover" in argv or not _take_over():
-            if signal_running_instance():
-                log.info("already running: asked that copy to open its panel")
-            else:
-                log.info("already running (an older copy that cannot be signalled)")
+            answer = signal_running_instance(wait=8.0)
+            if answer == "acked":
+                log.info("already running: that copy opened its panel")
+                return 0
+            if not manual or "--no-takeover" in argv:
+                log.info("already running (%s); leaving it be", answer)
+                return 0
+            # No answer: a hung copy (or one too old to answer) holds the
+            # lock and, often, no tray icon. The user just started this
+            # one, so replace it instead of quietly exiting.
+            log.warning("the running copy did not answer (%s); replacing it", answer)
+            if not _take_over(include_own_dir=True):
+                log.info("could not replace the running copy")
                 if manual:
                     _message_box(
-                        "QuotaTray is already running.\n\n"
-                        "Look for its icon in the taskbar tray; on Windows 11 new "
-                        "icons start hidden under the ^ arrow."
+                        "QuotaTray is already running but does not respond.\n\n"
+                        "End QuotaTray.exe in Task Manager, then start it again."
                     )
-            return 0
+                return 0
     log.info("%s v%s starting from %s", APP_NAME, __version__, install_dir())
     # Old installs (v1.1.2 and earlier) used another lock, so they cannot stop
     # this copy from starting; clear them out in the background anyway so
