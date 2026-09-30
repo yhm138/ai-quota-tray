@@ -1,5 +1,22 @@
 # Changelog
 
+## v1.3.6
+
+- **Fixed: double-clicking QuotaTray.exe could leave no icon in the tray**
+  - the tray icon is checked every few seconds after start and every 30 s
+    after that, and added again whenever Explorer refused or lost it
+    (Explorer busy or still starting at login). Before, one failed add
+    meant a running QuotaTray with no icon
+  - on Windows 11, every icon from a new exe path starts hidden under the
+    ^ overflow. QuotaTray now marks its own icon "show on the taskbar",
+    but only while you have not chosen yourself (set
+    `"promote_tray_icon": false` in config.json to leave it alone)
+  - a copy that is running but hung used to hold the single-instance lock,
+    so a new launch quietly exited. A new launch now asks the running copy
+    to open its panel and waits up to 8 s for an answer; with no answer it
+    replaces that copy, even one started from the same folder
+- Diagnostics shows whether the tray icon is in place
+
 ## v1.3.5
 
 - **Half the size**: the single-file exe went from 29.5 MB to 15.5 MB (the

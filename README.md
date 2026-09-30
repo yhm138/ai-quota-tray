@@ -201,6 +201,7 @@ machine. **The IDE has to be open**, otherwise the panel says "IDE not running".
   "danger_percent": 90,            // red threshold
   "icon_style": "bars",            // "bars" or "ring"
   "check_updates": true,           // look for a new release once a day
+  "promote_tray_icon": true,       // Windows 11: keep the icon out of the ^ overflow
   "remind_unused_resets": true,    // daily notification about banked resets
   "reset_reminder_hour": 10,       // ...from this local hour on
   "providers": {
@@ -448,6 +449,7 @@ Antigravity 内部跑一个语言服务器，启动参数里带 `--csrf_token`�
 - 每个 provider 的 `enabled` 改成 `false` 就不再采集它
 - 每个 provider 的 `order` 可以调整兜底顺序，或者直接删掉某条路径（比如嫌 `app_server` 每次都要起进程）
 - `check_updates` — 每天检查新版本
+- `promote_tray_icon` — Windows 11 下把托盘图标固定显示在任务栏上，而不是藏在 ^ 里（你自己在设置里改过的不会被覆盖）
 - `remind_unused_resets` / `reset_reminder_hour` — 未使用重置的每日提醒及其时间
 
 ## 排错

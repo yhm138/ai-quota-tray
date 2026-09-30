@@ -32,8 +32,10 @@ def _same(a: Path, b: Path) -> bool:
         return os.path.normcase(str(a)) == os.path.normcase(str(b))
 
 
-def parse_processes(rows, own_dir: Path, own_pids: set[int]) -> list[tuple[int, Path]]:
-    """(pid, install folder) for every QuotaTray process that is not ours."""
+def parse_processes(rows, own_dir: Path, own_pids: set[int], *,
+                    include_own_dir: bool = False) -> list[tuple[int, Path]]:
+    """(pid, install folder) for every QuotaTray process that is not ours.
+    include_own_dir: also copies started from our own folder (a hung one)."""
     if isinstance(rows, dict):
         rows = [rows]
     out: list[tuple[int, Path]] = []
@@ -55,15 +57,17 @@ def parse_processes(rows, own_dir: Path, own_pids: set[int]) -> list[tuple[int, 
                 # Some other program's run.pyw is none of our business.
                 if not (folder / "quota_tray").is_dir():
                     folder = None
-        if folder is None or _same(folder, own_dir):
+        if folder is None or (not include_own_dir and _same(folder, own_dir)):
             continue
         out.append((pid, folder))
     return out
 
 
-def other_copies(own_dir: Path) -> list[tuple[int, Path]]:
+def other_copies(own_dir: Path, *, include_own_dir: bool = False) -> list[tuple[int, Path]]:
     rows = powershell_json(_PS, timeout=20)
-    return parse_processes(rows, own_dir, {os.getpid(), os.getppid()})
+    # Our parent is the one-file bootloader of this very copy.
+    return parse_processes(rows, own_dir, {os.getpid(), os.getppid()},
+                           include_own_dir=include_own_dir)
 
 
 def wait_for_exit(pid: int, timeout_s: float = 30.0) -> None:

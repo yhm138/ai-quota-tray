@@ -534,6 +534,23 @@ rows = [
 found = instances.parse_processes(rows, own, {99})
 check("other installs found, ours and strangers left alone",
       sorted(pid for pid, _ in found) == [10, 13, 14], found)
+found = instances.parse_processes(rows, own, {99}, include_own_dir=True)
+check("a hung copy in our own folder can be replaced",
+      sorted(pid for pid, _ in found) == [10, 11, 13, 14], found)
+
+from quota_tray.win import trayicon                               # noqa: E402
+
+folders = {"{6D809377-6AF0-444B-8957-A3773F02200E}": str(Path("/pf"))}
+entries = [
+    ("111", str(Path("/other/app.exe")), None),
+    ("222", "{6D809377-6AF0-444B-8957-A3773F02200E}\\QuotaTray\\QuotaTray.exe", 0),
+    ("333", str(Path("/soft/QuotaTray.exe")), None),
+]
+hit = trayicon.find_entries(entries, str(Path("/soft/QuotaTray.exe")), folders.get)
+check("tray settings entry found by exe path", [e[0] for e in hit] == ["333"], hit)
+hit = trayicon.find_entries(entries, str(Path("/pf/QuotaTray/QuotaTray.exe")), folders.get)
+check("known-folder paths are expanded", [e[0] for e in hit] == ["222"], hit)
+check("icon check is a no-op off Windows", trayicon.icon_present(None) is None)
 
 import logging                                                   # noqa: E402
 import os                                                        # noqa: E402
