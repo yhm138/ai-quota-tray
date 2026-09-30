@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.2.4
+
+- **Fixed: after switching Codex accounts the bars kept showing the old
+  account** while plan and credits showed the new one, and *Refresh* did not
+  help. When the live usage API reported only some windows, the rest were
+  filled in from `~/.codex/sessions` logs, which still held the old
+  account's numbers. Now:
+  - a live answer (usage API or `codex app-server`) is used as is; session
+    logs and the local database are only a fallback when nothing live works
+  - even then, anything written before the current Codex login is ignored
+  - the Codex card shows the signed-in account's email
+- Codex windows use the window length the usage API reports
+  (`limit_window_seconds`) for their labels
+
 ## v1.2.3
 
 - **Check for updates now visibly answers.** It opens the panel with
