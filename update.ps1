@@ -129,12 +129,12 @@ function Invoke-QuotaTrayUpdate {
     # github.com downloads is needed. The API is only asked for "latest", and
     # the release page's redirect stands in when the API refuses (it allows
     # 60 anonymous calls an hour) or is blocked.
-    $headers = @{ "User-Agent" = "QuotaTray-updater" }
+    $ua = "QuotaTray-updater"
     $newTag = $Tag
     if (-not $newTag) {
         try {
             $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -UseBasicParsing `
-                -Headers @{ "User-Agent" = "QuotaTray-updater"; "Accept" = "application/vnd.github+json" }
+                -UserAgent $ua -Headers @{ "Accept" = "application/vnd.github+json" }
             $newTag = $rel.tag_name
         } catch {
             Log "GitHub API unavailable ($($_.Exception.Message)); reading the release page instead"
@@ -159,7 +159,7 @@ function Invoke-QuotaTrayUpdate {
         foreach ($name in $names) {
             $out = Join-Path $work $name
             try {
-                Invoke-WebRequest -Uri "$download/$name" -OutFile $out -Headers $headers -UseBasicParsing
+                Invoke-WebRequest -Uri "$download/$name" -OutFile $out -UserAgent $ua -UseBasicParsing
                 Log "downloaded $name"
                 return $out
             } catch {
@@ -189,7 +189,7 @@ function Invoke-QuotaTrayUpdate {
     } else {
         $zip = Join-Path $work "source.zip"
         Log "downloading source for $newTag"
-        Invoke-WebRequest -Uri "https://github.com/$Repo/archive/refs/tags/$newTag.zip" -OutFile $zip -Headers $headers -UseBasicParsing
+        Invoke-WebRequest -Uri "https://github.com/$Repo/archive/refs/tags/$newTag.zip" -OutFile $zip -UserAgent $ua -UseBasicParsing
         $payload = $zip
     }
 

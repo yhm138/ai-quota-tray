@@ -1,5 +1,25 @@
 # Changelog
 
+## v1.3.3
+
+- **Readable Claude limit names.** Claude's usage reply includes entries
+  under internal code names, which showed up as bars like *Iguana Necktie*
+  and *Nimbus Quill*:
+  - `iguana_necktie` is the Claude Code cloud-sessions credit; it moves out
+    of the bars into the details as *Cloud credit: 7.5% used - expires ...*
+  - `seven_day_overage_included` reads *7-day overage allowance* (also in
+    the resets note); other `five_hour_*` / `seven_day_*` limits read
+    *5-hour ...* / *7-day ...*
+  - unknown code names (e.g. `nimbus_quill`, `tangelo`) are experiments:
+    kept out of the bars and listed in Diagnostics under *internal quotas
+    (not shown)*
+- **A failed update names its log and opens it**: the message shows the
+  full path of `quota-tray.log` and has an *Open log* button next to
+  *Retry*. The v1.3.1 message "see update.log" pointed at a file that is
+  never written when Windows blocks the update script from starting
+- `update.ps1` sets its user agent with `-UserAgent`, which Windows
+  PowerShell 5.1 accepts (it can refuse `User-Agent` in `-Headers`)
+
 ## v1.3.2
 
 - **Updates run inside the running app, with progress.** *Update now* keeps
