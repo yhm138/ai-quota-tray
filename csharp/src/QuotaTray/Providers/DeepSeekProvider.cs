@@ -421,6 +421,7 @@ namespace QuotaTray.Providers
             page.Headline = parsed.Item2;
             page.Plan = "Pay as you go";
             page.Account = "key " + Mask(key);
+            page.Secret = key;
             page.Source = "api.deepseek.com/user/balance";
             page.Status = parsed.Item3 ? "connected" : "balance too low";
             page.DataTime = Time.Now;

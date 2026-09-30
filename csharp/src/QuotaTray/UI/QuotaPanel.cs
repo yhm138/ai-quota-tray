@@ -596,7 +596,8 @@ namespace QuotaTray.UI
                     x = r.Right + S(2);
                 }
             }
-            var metaBits = new[] { result.Plan, result.Account }.Where(s => !string.IsNullOrEmpty(s)).ToList();
+            // An API key gets its own row below (hover, Copy); the header keeps the plan.
+            var metaBits = new[] { result.Plan, result.Secret != null ? null : result.Account }.Where(s => !string.IsNullOrEmpty(s)).ToList();
             if (metaBits.Count > 0)
             {
                 var full = string.Join(" - ", metaBits);
@@ -622,6 +623,8 @@ namespace QuotaTray.UI
                 Draw(g, draw, result.Label, _fSmall, Theme.FgDim, left, y);
                 y += _fSmall.Height;
             }
+
+            if (!string.IsNullOrEmpty(result.Secret)) y = KeyRow(g, draw, result, left, y + S(4));
 
             if (!result.Ok)
             {
@@ -697,6 +700,59 @@ namespace QuotaTray.UI
                 y += _fSmall.Height;
             }
             return y;
+        }
+
+        private string _copied;                     // the key just copied, for the "Copied" label
+        private readonly Timer _copiedTimer = new Timer { Interval = 1500 };
+
+        /// <summary>API key  sk-...1234  [Copy]: the full key on hover, Copy puts it on the clipboard.</summary>
+        private int KeyRow(Graphics g, bool draw, ProviderResult result, int left, int y)
+        {
+            var key = result.Secret;
+            var labelW = Measure(g, "API key", _fSmall).Width + S(10);
+            var masked = (result.Account ?? "key").StartsWith("key ") ? result.Account.Substring(4) : result.Account ?? "";
+            var btnH = _fSmall.Height + S(4);
+            var textY = y + (btnH - _fSmall.Height) / 2;
+            Draw(g, draw, "API key", _fSmall, Theme.FgFaint, left, textY);
+            var size = DrawShort(g, draw, masked, 64, _fSmall, Theme.FgDim, left + labelW, textY, key);
+            var x = left + labelW + size.Width + S(8);
+            var copied = _copied == key;
+            var text = copied ? "Copied" : "Copy";
+            var ts = Measure(g, text, _fSmall);
+            var r = new Rectangle(x, y, ts.Width + S(16), btnH);
+            if (draw)
+            {
+                var hovered = _hover != null && _hover.Rect == (_clip != null ? Rectangle.Intersect(r, _clip.Value) : r);
+                using (var b = new SolidBrush(hovered ? Theme.Border : Theme.BgRow)) g.FillRectangle(b, r);
+                Draw(g, true, text, _fSmall, copied ? Theme.Ok : hovered ? Theme.Fg : Theme.FgDim, x + S(8), y + (btnH - ts.Height) / 2);
+            }
+            Action copy = () => CopyKey(key);
+            AddHit(draw, r, copy);
+            AddHit(draw, new Rectangle(left + labelW, textY, size.Width, size.Height), copy);
+            return y + btnH;
+        }
+
+        private void CopyKey(string key)
+        {
+            try { Clipboard.SetText(key); }
+            catch (Exception e)
+            {
+                Log.Warn("could not copy the key: " + e.Message);
+                return;
+            }
+            _copied = key;
+            _copiedTimer.Stop();
+            _copiedTimer.Tick -= ClearCopied;
+            _copiedTimer.Tick += ClearCopied;
+            _copiedTimer.Start();
+            Invalidate();
+        }
+
+        private void ClearCopied(object sender, EventArgs e)
+        {
+            _copiedTimer.Stop();
+            _copied = null;
+            Invalidate();
         }
 
         private void Flip(string id, int step, int count)

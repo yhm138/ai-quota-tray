@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.5.2
+
+- **Pay as you go: the API key is one hover or click away.** Each DeepSeek
+  page has an *API key* row: rest the mouse on the shortened `sk-...1234`
+  to see the whole key, and click it or **Copy** to put it on the
+  clipboard ("Copied" confirms). The full key is only kept in memory; the
+  cache and the Diagnostics report still show it shortened
+
 ## v1.5.1
 
 - **OpenCode CLI and OpenCode Desktop are told apart** on the DeepSeek

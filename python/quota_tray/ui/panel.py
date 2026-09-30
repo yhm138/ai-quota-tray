@@ -432,7 +432,8 @@ class Panel:
                 anchor="w",
             ).pack(anchor="w", pady=(2, 0))
 
-        meta_bits = [b for b in (result.plan, result.account) if b]
+        # An API key gets its own row below (hover, Copy); the header keeps the plan.
+        meta_bits = [b for b in (result.plan, None if result.secret else result.account) if b]
         if meta_bits:
             full = " - ".join(meta_bits)
             short = _ellipsis(full, 24 if len(pages) > 1 else 34)
@@ -440,6 +441,9 @@ class Panel:
             meta.pack(side="right", pady=(4, 0))
             if short != full:
                 _Tooltip(meta, "\n".join(meta_bits), self.f_small)
+
+        if result.secret:
+            self._key_row(inner, result)
 
         if not result.ok:
             tk.Label(
@@ -513,6 +517,35 @@ class Panel:
             foot.pack(anchor="w", pady=(8, 0))
             if _ellipsis(full, 58) != full:
                 _Tooltip(foot, full, self.f_small)
+
+    def _key_row(self, parent, result: ProviderResult) -> None:
+        """API key  sk-...1234  [Copy]: the full key on hover, Copy puts it
+        on the clipboard."""
+        key = result.secret or ""
+        row = tk.Frame(parent, bg=theme.BG_CARD)
+        row.pack(anchor="w", fill="x", pady=(4, 0))
+        tk.Label(row, text="API key", bg=theme.BG_CARD, fg=theme.FG_FAINT,
+                 font=self.f_small).pack(side="left", padx=(0, 10))
+        masked = tk.Label(row, text=(result.account or "key").replace("key ", "", 1), bg=theme.BG_CARD,
+                          fg=theme.FG_DIM, font=self.f_small, cursor="hand2")
+        masked.pack(side="left")
+        _Tooltip(masked, key, self.f_mono)
+        button = tk.Label(row, text="Copy", bg=theme.BG_ROW, fg=theme.FG_DIM, font=self.f_small,
+                          padx=8, pady=1, cursor="hand2")
+        button.pack(side="left", padx=(8, 0))
+
+        def copy(_event=None):
+            try:
+                self.root.clipboard_clear()
+                self.root.clipboard_append(key)
+                self.root.update()               # hand the text to the system clipboard now
+            except tk.TclError:
+                return
+            button.configure(text="Copied", fg=theme.OK)
+            button.after(1500, lambda: button.winfo_exists() and button.configure(text="Copy", fg=theme.FG_DIM))
+
+        for widget in (masked, button):
+            widget.bind("<Button-1>", copy)
 
     def _account_details(self, parent, result: ProviderResult) -> None:
         """Plan, subscription, credits and banked resets under the bars."""

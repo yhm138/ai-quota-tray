@@ -186,7 +186,8 @@ namespace QuotaTray
                     if (i == 0) r.Alternates.Add(new ProviderResult("claude", "Claude") { Ok = true, Label = "Claude Code" });
                     results.Add(r);
                 }
-                var ds = new ProviderResult("deepseek", "DeepSeek") { Ok = true, Billing = "payg", Headline = "\u00a5110.00", Label = "OpenCode" };
+                var ds = new ProviderResult("deepseek", "DeepSeek") { Ok = true, Billing = "payg", Headline = "\u00a5110.00", Label = "OpenCode",
+                    Account = "key sk-...cdef", Secret = "sk-0123456789abcdef" };
                 ds.Info.Add(new InfoRow("Balance", "\u00a5110.00", "good"));
                 results.Add(ds);
                 using (var p = new QuotaPanel(new PanelCallbacks { DiagnosticsText = () => "" }))
