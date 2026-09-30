@@ -16,9 +16,47 @@ param(
     [string]$Tag = "",           # empty = latest release
     [string]$InstallDir = "",    # empty = find it from run-at-login / running process
     [int]$WaitPid = 0,           # the tray app passes its own PID and exits
+    [string]$ReadyFile = "",     # written once the download is verified; the tray app waits for it
     [switch]$NoRestart,
     [switch]$DryRun              # resolve and download, change nothing
 )
+
+$script:LogDir = if ($env:APPDATA) { Join-Path $env:APPDATA "QuotaTray" } else { Join-Path $HOME ".quota-tray" }
+New-Item -ItemType Directory -Force -Path $script:LogDir | Out-Null
+$script:LogFile = Join-Path $script:LogDir "update.log"
+$script:Install = $null      # @{ dir; kind } once found, so any failure can still restart
+$script:Stopped = $false
+
+function Log([string]$msg) {
+    $line = "{0}  {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $msg
+    Write-Host "  $msg"
+    try { Add-Content -Path $script:LogFile -Value $line -Encoding UTF8 } catch { }
+}
+
+function Start-QuotaTray {
+    # Bring the app back whenever it is gone because of us, whatever failed.
+    $info = $script:Install
+    if (-not $info) { return }
+    if ($WaitPid -gt 0 -and (Get-Process -Id $WaitPid -ErrorAction SilentlyContinue)) {
+        Log "the tray app is still running; nothing to restart"
+        return
+    }
+    if ($WaitPid -le 0 -and -not $script:Stopped) { return }
+    $dir = $info.dir
+    if ($info.kind -eq "source") {
+        $pyw = Join-Path $dir ".venv\Scripts\pythonw.exe"
+        if (-not (Test-Path -LiteralPath $pyw)) { $pyw = "pythonw.exe" }
+        Start-Process -FilePath $pyw -ArgumentList ('"' + (Join-Path $dir "run.pyw") + '"') -WorkingDirectory $dir
+    } else {
+        $exe = Join-Path $dir "QuotaTray.exe"
+        if (-not (Test-Path -LiteralPath $exe) -and (Test-Path -LiteralPath "$exe.old")) {
+            Move-Item -LiteralPath "$exe.old" -Destination $exe -Force
+            Log "restored the previous QuotaTray.exe"
+        }
+        Start-Process -FilePath $exe -WorkingDirectory $dir
+    }
+    Log "QuotaTray restarted"
+}
 
 function Invoke-QuotaTrayUpdate {
     $ErrorActionPreference = "Stop"
@@ -26,16 +64,6 @@ function Invoke-QuotaTrayUpdate {
     try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     } catch { }
-
-    $logDir = if ($env:APPDATA) { Join-Path $env:APPDATA "QuotaTray" } else { Join-Path $HOME ".quota-tray" }
-    New-Item -ItemType Directory -Force -Path $logDir | Out-Null
-    $script:LogFile = Join-Path $logDir "update.log"
-
-    function Log([string]$msg) {
-        $line = "{0}  {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $msg
-        Write-Host "  $msg"
-        try { Add-Content -Path $script:LogFile -Value $line -Encoding UTF8 } catch { }
-    }
 
     Log "QuotaTray updater starting (repo $Repo)"
 
@@ -81,23 +109,42 @@ function Invoke-QuotaTrayUpdate {
         throw "$dir holds neither QuotaTray.exe nor run.pyw."
     }
     Log "install type: $kind"
+    $script:Install = @{ dir = $dir; kind = $kind }
 
     # ------------------------------------------------------------ pick the release
-    $headers = @{ "User-Agent" = "QuotaTray-updater"; "Accept" = "application/vnd.github+json" }
-    $api = if ($Tag) { "https://api.github.com/repos/$Repo/releases/tags/$Tag" } else { "https://api.github.com/repos/$Repo/releases/latest" }
-    $rel = Invoke-RestMethod -Uri $api -Headers $headers -UseBasicParsing
-    $newTag = $rel.tag_name
+    # With a tag (always, when the tray app runs this) nothing but plain
+    # github.com downloads is needed. The API is only asked for "latest", and
+    # the release page's redirect stands in when the API refuses (it allows
+    # 60 anonymous calls an hour) or is blocked.
+    $headers = @{ "User-Agent" = "QuotaTray-updater" }
+    $newTag = $Tag
+    if (-not $newTag) {
+        try {
+            $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -UseBasicParsing `
+                -Headers @{ "User-Agent" = "QuotaTray-updater"; "Accept" = "application/vnd.github+json" }
+            $newTag = $rel.tag_name
+        } catch {
+            Log "GitHub API unavailable ($($_.Exception.Message)); reading the release page instead"
+            $req = [System.Net.HttpWebRequest]::Create("https://github.com/$Repo/releases/latest")
+            $req.AllowAutoRedirect = $false
+            $req.UserAgent = "QuotaTray-updater"
+            $resp = $req.GetResponse()
+            $location = $resp.Headers["Location"]
+            $resp.Close()
+            if ($location -match "/releases/tag/([^/?#]+)") { $newTag = $Matches[1] }
+            else { throw "could not determine the latest release (got '$location')" }
+        }
+    }
+    $download = "https://github.com/$Repo/releases/download/$newTag"
     Log "target release: $newTag"
 
     $work = Join-Path ([IO.Path]::GetTempPath()) ("QuotaTray-update-" + [Guid]::NewGuid().ToString("N").Substring(0, 8))
     New-Item -ItemType Directory -Force -Path $work | Out-Null
 
     function Get-Asset([string]$name) {
-        $asset = $rel.assets | Where-Object { $_.name -eq $name } | Select-Object -First 1
-        if (-not $asset) { throw "release $newTag has no $name" }
         $out = Join-Path $work $name
         Log "downloading $name"
-        Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $out -Headers $headers -UseBasicParsing
+        Invoke-WebRequest -Uri "$download/$name" -OutFile $out -Headers $headers -UseBasicParsing
         return $out
     }
 
@@ -119,8 +166,14 @@ function Invoke-QuotaTrayUpdate {
     } else {
         $zip = Join-Path $work "source.zip"
         Log "downloading source for $newTag"
-        Invoke-WebRequest -Uri $rel.zipball_url -OutFile $zip -Headers $headers -UseBasicParsing
+        Invoke-WebRequest -Uri "https://github.com/$Repo/archive/refs/tags/$newTag.zip" -OutFile $zip -Headers $headers -UseBasicParsing
         $payload = $zip
+    }
+
+    if ($ReadyFile) {
+        # Only now may the tray app close: the new version is on disk and verified.
+        Set-Content -LiteralPath $ReadyFile -Value $newTag -Encoding ASCII
+        Log "download verified; the tray app can close now"
     }
 
     if ($DryRun) {
@@ -132,8 +185,9 @@ function Invoke-QuotaTrayUpdate {
     # ------------------------------------------------------------ stop the running copy
     if ($WaitPid -gt 0) {
         Log "waiting for the tray app (pid $WaitPid) to exit"
-        Wait-Process -Id $WaitPid -Timeout 30 -ErrorAction SilentlyContinue
+        Wait-Process -Id $WaitPid -Timeout 60 -ErrorAction SilentlyContinue
     }
+    $script:Stopped = $true
     $dirPattern = "*" + $dir.TrimEnd("\") + "*"
     Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
         ($_.Name -ieq "QuotaTray.exe" -and $_.ExecutablePath -and $_.ExecutablePath -like $dirPattern) -or
@@ -192,17 +246,6 @@ function Invoke-QuotaTrayUpdate {
         $updated = $true
         Log "updated $dir to $newTag"
     } finally {
-        # Start it again even when the update failed, so the tray icon comes back.
-        if (-not $NoRestart) {
-            if ($kind -eq "source") {
-                $pyw = Join-Path $dir ".venv\Scripts\pythonw.exe"
-                if (-not (Test-Path -LiteralPath $pyw)) { $pyw = "pythonw.exe" }
-                Start-Process -FilePath $pyw -ArgumentList ('"' + (Join-Path $dir "run.pyw") + '"') -WorkingDirectory $dir
-            } else {
-                Start-Process -FilePath (Join-Path $dir "QuotaTray.exe") -WorkingDirectory $dir
-            }
-            Log "QuotaTray restarted"
-        }
         Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
     }
     if ($updated) {
@@ -214,7 +257,12 @@ function Invoke-QuotaTrayUpdate {
 try {
     Invoke-QuotaTrayUpdate
 } catch {
-    $msg = "update failed: $($_.Exception.Message)"
-    Write-Host "  $msg" -ForegroundColor Red
-    try { if ($script:LogFile) { Add-Content -Path $script:LogFile -Value ("{0}  {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $msg) } } catch { }
+    Write-Host ""
+    Log "update failed: $($_.Exception.Message)"
+} finally {
+    # Whatever happened above, never leave the user without the tray app.
+    if (-not $NoRestart -and -not $DryRun) {
+        try { Start-QuotaTray } catch { Log "restart failed: $($_.Exception.Message)" }
+    }
+    if ($ReadyFile) { Remove-Item -LiteralPath $ReadyFile -Force -ErrorAction SilentlyContinue }
 }

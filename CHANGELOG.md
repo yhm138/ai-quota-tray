@@ -1,5 +1,20 @@
 # Changelog
 
+## v1.3.1
+
+- **Fixed: after *Update now* QuotaTray could disappear for good.** The app
+  closed right away while `update.ps1` looked up the release through the
+  GitHub API; when that failed (rate limit, blocked network) the script
+  stopped without starting QuotaTray again. Now:
+  - the app stays open until the new version is downloaded and its checksum
+    verified; if the download fails it stays and shows the reason with
+    *Retry*
+  - the script downloads straight from the release page (no API call when
+    the version is known) and falls back to the release page's redirect
+    when the API refuses
+  - whatever fails, the script starts QuotaTray again if it had closed for
+    the update, restoring the previous exe if needed
+
 ## v1.3.0
 
 - **Several accounts per product.** When the logins on this machine belong to
