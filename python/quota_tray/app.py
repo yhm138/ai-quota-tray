@@ -160,9 +160,11 @@ class QuotaTrayApp:
         )
 
     def _icon_image(self):
-        entries = [(r.provider_id, r.worst_percent if r.ok else None) for r in self.results]
+        # The bars are for usage limits; a prepaid balance has no percentage.
+        entries = [(r.provider_id, r.worst_percent if r.ok else None) for r in self.results
+                   if r.billing != "payg"]
         if not entries:
-            entries = [(p.id, None) for p in self.providers]
+            entries = [(p.id, None) for p in self.providers if p.billing != "payg"]
         return icon_render.render(
             entries,
             warn=float(self.config.get("warn_percent", 75)),
@@ -177,6 +179,9 @@ class QuotaTrayApp:
                 bits.append(f"{r.name}: {r.status[:16]}")
                 continue
             top = r.sorted_windows()[:2]
+            if not top and r.headline:
+                bits.append(f"{r.name}: {r.headline}")
+                continue
             bits.append(f"{r.name}: " + " / ".join(w.percent_text for w in top))
         if not bits:
             bits = ["loading..."]
@@ -642,6 +647,8 @@ def run_console(diagnose: bool = False) -> int:
         lines.append(f"  status: {r.status or ('connected' if r.ok else 'unavailable')}")
         if r.source:
             lines.append(f"  source: {r.source}")
+        for row in r.info if r.billing == "payg" else []:
+            lines.append(f"  {row.label or ' ':<18} {row.value}")
         for w in r.sorted_windows():
             reset = humanize_delta(w.resets_at)
             extra = f"  {w.detail}" if w.detail else ""

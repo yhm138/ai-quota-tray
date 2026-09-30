@@ -81,6 +81,8 @@ class ProviderResult:
     info: list[InfoRow] = field(default_factory=list)       # plan, renewal, credits
     resets: list[ResetGrant] = field(default_factory=list)  # banked limit resets
     label: str | None = None               # which login this is, e.g. "Claude Desktop"
+    billing: str = "subscription"          # "subscription" or "payg" (pay as you go): the panel tab
+    headline: str | None = None            # short summary when there are no bars, e.g. a balance
     # Other accounts of the same product signed in elsewhere on this machine
     # (Claude Code vs Claude Desktop, Windows vs WSL Codex), one page each.
     alternates: list["ProviderResult"] = field(default_factory=list)
@@ -91,7 +93,7 @@ class ProviderResult:
     def adopt(self, page: "ProviderResult") -> None:
         """Take over everything a single-account page found."""
         for name in ("ok", "status", "source", "account", "plan", "windows", "data_time",
-                     "info", "resets", "label"):
+                     "info", "resets", "label", "headline"):
             setattr(self, name, getattr(page, name))
 
     def active_resets(self, now: datetime | None = None) -> list[ResetGrant]:
@@ -144,6 +146,8 @@ class ProviderResult:
                 for g in self.resets
             ],
             "label": self.label,
+            "billing": self.billing,
+            "headline": self.headline,
             "alternates": [a.to_cache() for a in self.alternates],
         }
 
@@ -180,6 +184,8 @@ class ProviderResult:
             for g in d.get("resets", []) if isinstance(g, dict)
         ]
         r.label = d.get("label")
+        r.billing = d.get("billing") or "subscription"
+        r.headline = d.get("headline")
         r.alternates = [cls.from_cache(a) for a in d.get("alternates", []) if isinstance(a, dict)]
         return r
 

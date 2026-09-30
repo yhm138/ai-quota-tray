@@ -1040,6 +1040,75 @@ check("countdown 3d 2h", humanize_delta(t + timedelta(days=3, hours=2), now=t) =
 check("countdown 4h 12m", humanize_delta(t + timedelta(hours=4, minutes=12), now=t) == "4h 12m")
 check("countdown resetting", humanize_delta(t - timedelta(minutes=1), now=t) == "resetting")
 
+# ------------------------------------------------------------------ DeepSeek
+
+print("\n--- DeepSeek ---")
+from quota_tray.providers import deepseek                         # noqa: E402
+
+check("jsonc comments and trailing commas", json.loads(deepseek.strip_jsonc(
+    '{\n // note\n "a": "http://x//y", /* block */ "b": [1, 2,],\n}')) == {"a": "http://x//y", "b": [1, 2]})
+v1 = "version: 1\n\nrefs:\n  # mine\n  DEEPSEEK_API_KEY: sk-v1key\n  OPENAI_API_KEY: sk-other\nrecords:\n  x/y:\n    kind: grant\n"
+check("dsh credentials (version 1)", deepseek.dsh_credentials_key(v1) == "sk-v1key")
+check("dsh credentials (flat, quoted)", deepseek.dsh_credentials_key("DEEPSEEK_API_KEY: 'sk-flat'\n") == "sk-flat")
+check("dsh credentials without the key", deepseek.dsh_credentials_key("version: 1\nrefs:\n  OPENAI_API_KEY: x\n") is None)
+check("dotenv key", deepseek.dotenv_key('export DEEPSEEK_API_KEY="sk-env" # comment\n') == "sk-env")
+check("opencode auth.json", deepseek.opencode_auth_keys(
+    {"deepseek": {"type": "api", "key": "sk-oc"}, "anthropic": {"type": "oauth"}}) == ["sk-oc"])
+check("opencode.json key, env reference, relay skipped", deepseek.opencode_config_keys({"provider": {
+    "deepseek": {"options": {"apiKey": "{env:MY_DS}"}},
+    "ds-relay": {"options": {"baseURL": "https://relay.example/v1", "apiKey": "sk-relay"}},
+    "mine": {"options": {"baseURL": "https://api.deepseek.com/v1", "apiKey": "sk-cfg"}},
+}}, env={"MY_DS": "sk-fromenv"}) == ["sk-fromenv", "sk-cfg"])
+
+ds_home = Path(tempfile.mkdtemp())
+(ds_home / ".local" / "share" / "opencode").mkdir(parents=True)
+(ds_home / ".local" / "share" / "opencode" / "auth.json").write_text(
+    json.dumps({"deepseek": {"type": "api", "key": "sk-shared1234"}}), encoding="utf-8")
+(ds_home / ".dsh").mkdir()
+(ds_home / ".dsh" / ".credentials.yaml").write_text(
+    "version: 1\nrefs:\n  DEEPSEEK_API_KEY: sk-shared1234\n", encoding="utf-8")
+deepseek._homes = lambda settings: [(ds_home, "")]
+found, _notes = deepseek.discover_keys({"scan_wsl": False}, env={"DEEPSEEK_API_KEY": "sk-envonly9999"})
+check("keys from OpenCode, dsh and the environment", [w for _k, w in found]
+      == ["OpenCode", "DeepSeek Harness", "env DEEPSEEK_API_KEY"], found)
+
+seen_keys = []
+
+
+def balance_get(url, headers=None, **_k):
+    seen_keys.append((url, headers.get("Authorization")))
+    if headers.get("Authorization") == "Bearer sk-envonly9999":
+        return FakeResp({"is_available": False, "balance_infos": [
+            {"currency": "USD", "total_balance": "0.40", "granted_balance": "0.00", "topped_up_balance": "0.40"}]})
+    return FakeResp({"is_available": True, "balance_infos": [
+        {"currency": "CNY", "total_balance": "110.00", "granted_balance": "10.00", "topped_up_balance": "100.00"}]})
+
+
+deepseek.session = lambda: fake_session(get=balance_get)
+real_discover = deepseek.discover_keys
+deepseek.discover_keys = lambda settings, env=None: real_discover(
+    settings, env={"DEEPSEEK_API_KEY": "sk-envonly9999"})
+dr = deepseek.DeepSeekProvider(Config()).fetch()
+check("deepseek: one page per key, shared key merged", dr.ok and len(dr.pages()) == 2
+      and dr.label == "OpenCode + DeepSeek Harness" and dr.alternates[0].label == "env DEEPSEEK_API_KEY",
+      [(p.label, p.status) for p in dr.pages()])
+dinfo = {row.label: (row.value, row.tone) for row in dr.info}
+check("deepseek: balance in yuan", dinfo.get("Balance") == ("\u00a5110.00", "good") and dr.headline == "\u00a5110.00",
+      dinfo)
+check("deepseek: topped up and granted", any("\u00a5100.00 topped up" in row.value and "granted" in row.value
+                                             for row in dr.info), dr.info)
+low = dr.alternates[0]
+check("deepseek: low balance warns", {row.label: row.tone for row in low.info}.get("Balance") == "warn"
+      and any(row.label == "Status" for row in low.info), low.info)
+check("deepseek: pay-as-you-go tab", dr.billing == "payg" and dr.plan == "Pay as you go"
+      and dr.account == "key sk-...1234")
+check("deepseek: keys only go to api.deepseek.com", {u for u, _a in seen_keys} == {deepseek.BALANCE_URL})
+check("deepseek: survives the cache", ProviderResult.from_cache(json.loads(json.dumps(dr.to_cache()))).billing == "payg")
+deepseek.discover_keys = lambda settings, env=None: ([], ["none"])
+nr = deepseek.DeepSeekProvider(Config()).fetch()
+check("deepseek: no key, not installed", not nr.ok and not nr.installed)
+deepseek.discover_keys = real_discover
+
 print(f"\npassed {len(PASS)} / {len(PASS) + len(FAIL)}")
 if FAIL:
     print("failures:", FAIL)

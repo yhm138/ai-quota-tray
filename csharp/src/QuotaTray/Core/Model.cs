@@ -100,6 +100,8 @@ namespace QuotaTray.Core
         public List<InfoRow> Info = new List<InfoRow>();
         public List<ResetGrant> Resets = new List<ResetGrant>();
         public string Label;                 // which login this is, e.g. "Claude Desktop"
+        public string Billing = "subscription";   // "subscription" or "payg" (pay as you go): the panel tab
+        public string Headline;              // short summary when there are no bars, e.g. a balance
         // Other accounts of the same product signed in elsewhere on this
         // machine (Claude Code vs Claude Desktop, Windows vs WSL Codex).
         public List<ProviderResult> Alternates = new List<ProviderResult>();
@@ -121,7 +123,7 @@ namespace QuotaTray.Core
         {
             Ok = page.Ok; Status = page.Status; Source = page.Source; Account = page.Account;
             Plan = page.Plan; Windows = page.Windows; DataTime = page.DataTime; Info = page.Info;
-            Resets = page.Resets; Label = page.Label;
+            Resets = page.Resets; Label = page.Label; Headline = page.Headline;
         }
 
         public List<ResetGrant> ActiveResets(DateTimeOffset? now = null) =>
@@ -178,6 +180,8 @@ namespace QuotaTray.Core
                 return (object)j;
             }).ToList();
             o["label"] = Label;
+            o["billing"] = Billing;
+            o["headline"] = Headline;
             o["alternates"] = Alternates.Select(a => (object)a.ToCache()).ToList();
             return o;
         }
@@ -195,6 +199,8 @@ namespace QuotaTray.Core
                 FetchedAt = Time.Parse(d["fetched_at"]),
                 DataTime = Time.Parse(d["data_time"]),
                 Label = d.Str("label"),
+                Billing = d.Text("billing") ?? "subscription",
+                Headline = d.Str("headline"),
             };
             foreach (var w in (d.Arr("windows") ?? new List<object>()).OfType<JObj>())
             {

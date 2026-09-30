@@ -170,10 +170,35 @@ namespace QuotaTray
             Step("config", () => new Config().Provider("claude").Arr("order").Count.ToString());
             Step("panel", () =>
             {
+                // Both tabs with sample cards, enough of them to need the scrollbar.
+                var now = Time.Now;
+                var results = new List<ProviderResult>();
+                for (var i = 0; i < 6; i++)
+                {
+                    var r = new ProviderResult("claude", "Claude " + i)
+                    {
+                        Ok = true, Plan = "Max 20x", Account = "someone.with.a.long.address@example.com", Source = "selftest",
+                        Label = i == 0 ? "Claude Desktop" : null,
+                    };
+                    r.Windows.Add(new QuotaWindow("five_hour", "5-hour window", 42, now.AddHours(2), order: 10));
+                    r.Windows.Add(new QuotaWindow("seven_day", "A very long window label that gets cut", 91, now.AddDays(3), order: 20));
+                    r.Info.Add(new InfoRow("Plan", "Max 20x"));
+                    if (i == 0) r.Alternates.Add(new ProviderResult("claude", "Claude") { Ok = true, Label = "Claude Code" });
+                    results.Add(r);
+                }
+                var ds = new ProviderResult("deepseek", "DeepSeek") { Ok = true, Billing = "payg", Headline = "\u00a5110.00", Label = "OpenCode" };
+                ds.Info.Add(new InfoRow("Balance", "\u00a5110.00", "good"));
+                results.Add(ds);
                 using (var p = new QuotaPanel(new PanelCallbacks { DiagnosticsText = () => "" }))
                 {
-                    p.SetData(new List<ProviderResult>(), new PanelMeta());
                     var _ = p.Handle;
+                    p.SetData(results, new PanelMeta { Subtitle = "selftest", Footer = "selftest" });
+                    using (var a = p.Snapshot())
+                    {
+                        p.SelectTab("payg");
+                        using (var b = p.Snapshot())
+                            if (a.Width < 100 || b.Height < 100) throw new InvalidOperationException($"panel drawn at {a.Size} / {b.Size}");
+                    }
                 }
             });
             Emit(failures.Count > 0 ? failures : new List<string> { "selftest OK" });

@@ -1,5 +1,20 @@
 # Changelog
 
+## v1.5.0
+
+- **New: DeepSeek API balance** (both editions). QuotaTray finds the DeepSeek
+  key that **OpenCode** (`auth.json`, `opencode.json`) or the official
+  **DeepSeek Harness** (`dsh`, `~/.dsh/.credentials.yaml`) keeps, or
+  `DEEPSEEK_API_KEY`, on Windows and in WSL, and shows the balance from
+  `api.deepseek.com/user/balance`: total, topped up and granted, amber
+  below `low_balance`. Each distinct key gets its own page, labelled with
+  the tools that hold it. Keys go to api.deepseek.com only
+- **Two tabs at the top of the panel**: *Subscriptions* (Claude, Codex,
+  Antigravity) and *Pay as you go* (DeepSeek). The tray icon's bars stay
+  for subscriptions; the tooltip shows the DeepSeek balance
+- **Each tab scrolls** when its cards are taller than the screen allows
+  (scrollbar and mouse wheel)
+
 ## v1.4.2
 
 - **Hover to see the full text**: a long email (or plan, model name,

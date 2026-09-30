@@ -19,6 +19,7 @@ PROVIDER_TINT = {
     "claude": "#C96442",
     "codex": "#10A37F",
     "antigravity": "#4285F4",
+    "deepseek": "#4D6BFE",
 }
 
 

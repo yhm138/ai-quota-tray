@@ -157,8 +157,11 @@ namespace QuotaTray.UI
 
         private void UpdateIcon()
         {
-            var entries = _results.Select(r => new KeyValuePair<string, double?>(r.ProviderId, r.Ok ? r.WorstPercent : null)).ToList();
-            if (entries.Count == 0) entries = _providers.Select(p => new KeyValuePair<string, double?>(p.Id, null)).ToList();
+            // The bars are for usage limits; a prepaid balance has no percentage.
+            var entries = _results.Where(r => r.Billing != "payg")
+                .Select(r => new KeyValuePair<string, double?>(r.ProviderId, r.Ok ? r.WorstPercent : null)).ToList();
+            if (entries.Count == 0)
+                entries = _providers.Where(p => p.Billing != "payg").Select(p => new KeyValuePair<string, double?>(p.Id, null)).ToList();
             var size = SystemInformation.SmallIconSize.Width;
             using (var bmp = IconRenderer.Render(entries, Math.Max(16, size), _config.Number("warn_percent", 75),
                        _config.Number("danger_percent", 90), _config.Text("icon_style", "bars")))
@@ -176,7 +179,9 @@ namespace QuotaTray.UI
                     bits.Add($"{r.Name}: {Clip(r.Status, 16)}");
                     continue;
                 }
-                bits.Add($"{r.Name}: " + string.Join(" / ", r.SortedWindows().Take(2).Select(w => w.PercentText)));
+                var top = r.SortedWindows().Take(2).ToList();
+                bits.Add(top.Count == 0 && r.Headline != null ? $"{r.Name}: {r.Headline}"
+                    : $"{r.Name}: " + string.Join(" / ", top.Select(w => w.PercentText)));
             }
             if (bits.Count == 0) bits.Add("loading...");
             // NotifyIcon.Text is limited to 63 characters on .NET Framework.
@@ -497,6 +502,8 @@ namespace QuotaTray.UI
                 lines.Add($"=== {r.Name}" + (r.Plan != null ? $" [{r.Plan}]" : "") + " ===");
                 lines.Add($"  status: {(string.IsNullOrEmpty(r.Status) ? (r.Ok ? "connected" : "unavailable") : r.Status)}");
                 if (r.Source != null) lines.Add($"  source: {r.Source}");
+                if (r.Billing == "payg")
+                    foreach (var row in r.Info) lines.Add($"  {(row.Label.Length > 0 ? row.Label : " "),-18} {row.Value}");
                 foreach (var w in r.SortedWindows())
                 {
                     var reset = Time.HumanizeDelta(w.ResetsAt);

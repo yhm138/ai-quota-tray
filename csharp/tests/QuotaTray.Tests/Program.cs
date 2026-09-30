@@ -228,6 +228,59 @@ namespace QuotaTray.Tests
             var ports = AntigravityProvider.ParseNetstat("  TCP    127.0.0.1:50123   0.0.0.0:0   LISTENING   4242\n  TCP 127.0.0.1:1 1.2.3.4:5 ESTABLISHED 4242\n");
             Check("netstat ports", ports.ContainsKey(4242) && ports[4242].SequenceEqual(new[] { 50123 }));
 
+            Console.WriteLine("--- DeepSeek ---");
+            Check("jsonc comments and trailing commas", Json.Write(Json.ParseObject(DeepSeekProvider.StripJsonc(
+                "{\n // note\n \"a\": \"http://x//y\", /* block */ \"b\": [1, 2,],\n}"))) == "{\"a\":\"http://x//y\",\"b\":[1,2]}");
+            var v1 = "version: 1\n\nrefs:\n  # mine\n  DEEPSEEK_API_KEY: sk-v1key\n  OPENAI_API_KEY: sk-other\nrecords:\n  x/y:\n    kind: grant\n";
+            Check("dsh credentials (version 1)", DeepSeekProvider.DshCredentialsKey(v1) == "sk-v1key");
+            Check("dsh credentials (flat, quoted)", DeepSeekProvider.DshCredentialsKey("DEEPSEEK_API_KEY: 'sk-flat'\n") == "sk-flat");
+            Check("dsh credentials without the key", DeepSeekProvider.DshCredentialsKey("version: 1\nrefs:\n  OPENAI_API_KEY: x\n") == null);
+            Check("dotenv key", DeepSeekProvider.DotenvKey("export DEEPSEEK_API_KEY=\"sk-env\" # comment\n") == "sk-env");
+            Check("opencode auth.json", DeepSeekProvider.OpencodeAuthKeys(J("{\"deepseek\":{\"type\":\"api\",\"key\":\"sk-oc\"},\"anthropic\":{\"type\":\"oauth\"}}"))
+                .SequenceEqual(new[] { "sk-oc" }));
+            var ocKeys = DeepSeekProvider.OpencodeConfigKeys(J(@"{""provider"": {
+                ""deepseek"": {""options"": {""apiKey"": ""{env:MY_DS}""}},
+                ""ds-relay"": {""options"": {""baseURL"": ""https://relay.example/v1"", ""apiKey"": ""sk-relay""}},
+                ""mine"": {""options"": {""baseURL"": ""https://api.deepseek.com/v1"", ""apiKey"": ""sk-cfg""}}}}"), n => n == "MY_DS" ? "sk-fromenv" : null);
+            Check("opencode.json key, env reference, relay skipped", ocKeys.SequenceEqual(new[] { "sk-fromenv", "sk-cfg" }), string.Join(",", ocKeys));
+
+            var dsHome = Path.Combine(Paths.AppDir, "ds-home");
+            Directory.CreateDirectory(Path.Combine(dsHome, ".local", "share", "opencode"));
+            File.WriteAllText(Path.Combine(dsHome, ".local", "share", "opencode", "auth.json"), "{\"deepseek\":{\"type\":\"api\",\"key\":\"sk-shared1234\"}}");
+            Directory.CreateDirectory(Path.Combine(dsHome, ".dsh"));
+            File.WriteAllText(Path.Combine(dsHome, ".dsh", ".credentials.yaml"), "version: 1\nrefs:\n  DEEPSEEK_API_KEY: sk-shared1234\n");
+            DeepSeekProvider.HomesOverride = st => new List<KeyValuePair<string, string>> { new KeyValuePair<string, string>(dsHome, "") };
+            DeepSeekProvider.Env = n => n == "DEEPSEEK_API_KEY" ? "sk-envonly9999" : null;
+            var dk = DeepSeekProvider.DiscoverKeys(new JObj());
+            Check("keys from OpenCode, dsh and the environment", dk.Item1.Select(k => k.Value)
+                .SequenceEqual(new[] { "OpenCode", "DeepSeek Harness", "env DEEPSEEK_API_KEY" }), string.Join(",", dk.Item1.Select(k => k.Value)));
+
+            var seenUrls = new HashSet<string>();
+            Http.Send = req =>
+            {
+                seenUrls.Add(req.Url);
+                return req.Headers["Authorization"] == "Bearer sk-envonly9999"
+                    ? new HttpReply(200, "{\"is_available\":false,\"balance_infos\":[{\"currency\":\"USD\",\"total_balance\":\"0.40\",\"granted_balance\":\"0.00\",\"topped_up_balance\":\"0.40\"}]}")
+                    : new HttpReply(200, "{\"is_available\":true,\"balance_infos\":[{\"currency\":\"CNY\",\"total_balance\":\"110.00\",\"granted_balance\":\"10.00\",\"topped_up_balance\":\"100.00\"}]}");
+            };
+            var dr = new DeepSeekProvider(new Config()).Fetch();
+            Check("deepseek: one page per key, shared key merged", dr.Ok && dr.Pages().Count == 2 && dr.Label == "OpenCode + DeepSeek Harness"
+                                                                   && dr.Alternates[0].Label == "env DEEPSEEK_API_KEY",
+                string.Join(",", dr.Pages().Select(pg => pg.Label + ":" + pg.Status)));
+            var bal = dr.Info.FirstOrDefault(i => i.Label == "Balance");
+            Check("deepseek: balance in yuan", bal != null && bal.Value == "\u00a5110.00" && bal.Tone == "good" && dr.Headline == "\u00a5110.00");
+            Check("deepseek: topped up and granted", dr.Info.Any(i => i.Value.Contains("\u00a5100.00 topped up") && i.Value.Contains("granted")));
+            var lowPage = dr.Alternates[0];
+            Check("deepseek: low balance warns", lowPage.Info.Any(i => i.Label == "Balance" && i.Tone == "warn") && lowPage.Info.Any(i => i.Label == "Status"));
+            Check("deepseek: pay-as-you-go tab", dr.Billing == "payg" && dr.Plan == "Pay as you go" && dr.Account == "key sk-...1234");
+            Check("deepseek: keys only go to api.deepseek.com", seenUrls.SetEquals(new[] { DeepSeekProvider.BalanceUrl }));
+            Check("deepseek: survives the cache", ProviderResult.FromCache(Json.ParseObject(Json.Write(dr.ToCache()))).Billing == "payg");
+            DeepSeekProvider.Env = n => null;
+            File.Delete(Path.Combine(dsHome, ".local", "share", "opencode", "auth.json"));
+            File.Delete(Path.Combine(dsHome, ".dsh", ".credentials.yaml"));
+            var nr = new DeepSeekProvider(new Config()).Fetch();
+            Check("deepseek: no key, not installed", !nr.Ok && !nr.Installed);
+
             Console.WriteLine("--- accounts, reminders, updates ---");
             var a1 = new ProviderResult("x", "X") { Account = "A@x.com", Label = "one" };
             var a2 = new ProviderResult("x", "X") { Account = "a@x.com", Label = "two" };

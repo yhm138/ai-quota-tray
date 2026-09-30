@@ -79,6 +79,14 @@ DEFAULTS: dict[str, Any] = {
             "show_models": True,
             "max_models": 6,
         },
+        "deepseek": {
+            "enabled": True,
+            "api_key": "",               # manual fallback: a DeepSeek API key
+            "scan_opencode": True,       # the key OpenCode keeps for DeepSeek
+            "scan_dsh": True,            # the key DeepSeek Harness (dsh) keeps
+            "scan_wsl": True,
+            "low_balance": 5,            # amber below this much (in the account's currency)
+        },
     },
 }
 
