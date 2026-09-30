@@ -1,6 +1,6 @@
 @echo off
 setlocal enabledelayedexpansion
-cd /d "%~dp0"
+cd /d "%~dp0.."
 title QuotaTray - publish to GitHub
 
 echo.
@@ -181,10 +181,10 @@ if not defined PYEXE (
 if defined PYEXE (
     echo.
     echo   [1/6] Writing the GitHub Actions workflows ...
-    !PYEXE! tools\install_workflows.py
+    !PYEXE! scripts\install_workflows.py
     echo.
     echo   [2/6] Pointing the README badges at !OWNER!/!REPO! ...
-    !PYEXE! tools\set_repo_owner.py "!OWNER!" "!REPO!"
+    !PYEXE! scripts\set_repo_owner.py "!OWNER!" "!REPO!"
 ) else (
     echo   [1-2/6] Skipped - no Python found.
     echo           The Actions workflows and README badges will need doing by hand.

@@ -1,6 +1,6 @@
 @echo off
 setlocal enabledelayedexpansion
-cd /d "%~dp0"
+cd /d "%~dp0.."
 title QuotaTray - cut a release
 
 echo.
@@ -92,7 +92,7 @@ echo      repository : !ORIGIN!
 REM Refresh the workflow files, then make sure they are actually committed.
 REM Tagging a commit that has no workflow in it produces no build at all.
 if defined PYEXE (
-    !PYEXE! tools\install_workflows.py >nul 2>nul
+    !PYEXE! scripts\install_workflows.py >nul 2>nul
 )
 "!GIT!" ls-files --error-unmatch .github/workflows/build.yml >nul 2>nul
 if errorlevel 1 (

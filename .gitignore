@@ -14,8 +14,13 @@ build/
 dist/
 *.spec
 
-# generated at build time by tools/make_icon.py
+# generated at build time by python/tools/make_icon.py
 assets/
+
+# dotnet
+bin/
+obj/
+*.user
 
 # local diagnostic output - may contain machine paths and account names
 _probe.txt

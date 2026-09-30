@@ -11,6 +11,9 @@
 *.pyw   text eol=lf
 *.yml   text eol=lf
 *.md    text eol=lf
+*.cs    text eol=lf
+*.csproj text eol=lf
+*.manifest text eol=lf
 
 *.png   binary
 *.ico   binary

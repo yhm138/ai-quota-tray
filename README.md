@@ -47,13 +47,18 @@ them is unavailable. New versions install from the tray menu in one click.
 
 ### Option 1 — the executable (no Python needed)
 
-Download from the [latest release](../../releases/latest):
+Download from the [latest release](../../releases/latest). There are two
+editions with the same panel, data sources and settings; pick either one:
 
-| File | When to use it |
-|---|---|
-| `QuotaTray-<version>-windows-x64.exe` | Single file. Simplest. Rename it to `QuotaTray.exe` if you like; updates keep whatever name it has. |
-| `QuotaTray-<version>-windows-x64-portable.zip` | Unzip and run `QuotaTray.exe` inside. Starts faster and is less likely to trip antivirus. |
-| `QuotaTray-<version>-SHA256SUMS.txt` | Verify what you downloaded (see below). |
+| File | Edition | When to use it |
+|---|---|---|
+| `QuotaTray-<version>-windows-x64.exe` | Python | Single file, ~15 MB. The original; has every fallback path. Rename it to `QuotaTray.exe` if you like; updates keep whatever name it has. |
+| `QuotaTray-<version>-windows-x64-portable.zip` | Python | Unzip and run `QuotaTray.exe` inside. Starts faster and is less likely to trip antivirus. |
+| `QuotaTray-<version>-csharp-windows-anycpu.exe` | C# | Single file, **under 0.2 MB**, starts instantly. Uses the .NET Framework 4.8 built into Windows 10/11, runs natively on x64 and ARM64. See [the C# edition](#the-c-edition). |
+| `QuotaTray-<version>-SHA256SUMS.txt` | | Verify what you downloaded (see below). |
+
+Only one QuotaTray runs at a time, whichever edition: both share the settings
+in `%APPDATA%\QuotaTray`, and starting one replaces the other.
 
 Every file carries the version and architecture, e.g.
 `QuotaTray-v1.3.2-windows-x64.exe`. Releases before v1.3.2 used plain names.
@@ -81,7 +86,7 @@ Get-FileHash .\QuotaTray-v1.3.2-windows-x64.exe -Algorithm SHA256
 
 ```powershell
 git clone https://github.com/yhm138/ai-quota-tray.git
-cd QuotaTray
+cd ai-quota-tray\python
 .\install.bat
 ```
 
@@ -93,7 +98,42 @@ during setup (the panel uses tkinter):
 winget install Python.Python.3.12
 ```
 
+## Repository layout
+
+| Folder | What is in it |
+|---|---|
+| `python/` | The Python edition: `quota_tray/` (the app), `tests/`, `tools/`, `run.pyw` and its `.bat` scripts |
+| `csharp/` | The C# edition: `src/QuotaTray/` (the app) and `tests/QuotaTray.Tests/` |
+| `scripts/` | Maintainer scripts: publishing, releases, the workflow generator |
+| `update.ps1` | The stand-alone updater (stays at the root: older versions download it from there) |
+| `docs/` | The screenshot |
+
+## The C# edition
+
+The same app written in C# for .NET Framework 4.8, which ships with Windows 10
+(1903+) and 11. It is a single exe under 0.2 MB with nothing to unpack, so it
+starts instantly and uses far less memory than the Python build.
+
+It covers the same data: Claude (Claude Code logins, including WSL, and
+Claude Desktop's own login), Codex (the live usage API with plan, credits and
+resets, `codex app-server`, the session logs) and Antigravity, with the same
+multi-account pages, reset reminder, one-click in-app update, diagnostics and
+run-at-login. Not included: the claude.ai cookie fallbacks and the Codex SQLite
+scan, which the Python edition keeps as last resorts.
+
+Build it yourself with the .NET SDK (any OS can compile it):
+
+```powershell
+dotnet build csharp\src\QuotaTray\QuotaTray.csproj -c Release
+dotnet run --project csharp\tests\QuotaTray.Tests     # offline checks
+```
+
+`QuotaTray.exe --diagnose` writes the source report, `--selftest` checks
+AES-GCM, the tray icon and the panel on this machine.
+
 ## The scripts
+
+Python edition scripts live in `python/`, maintainer scripts in `scripts/`.
 
 | File | What it does |
 |---|---|
@@ -104,10 +144,10 @@ winget install Python.Python.3.12
 | `preview.bat` | Draw the panel with fake data to check the UI renders |
 | `claude_login.bat` | Start Claude Code with the proxy port forced to a known-good value |
 | `build_exe.bat` | Build `dist\QuotaTray.exe` locally |
-| `publish.bat` | Create the GitHub repository and push (one-time) |
-| `release.bat` | Tag a version, which builds and publishes a release |
-| `fix_push.bat` | Retry a failed push with the full error shown |
-| `find_gh.bat` | Locate git/gh when a stale PATH hides them |
+| `scripts\publish.bat` | Create the GitHub repository and push (one-time) |
+| `scripts\release.bat` | Tag a version, which builds and publishes a release |
+| `scripts\fix_push.bat` | Retry a failed push with the full error shown |
+| `scripts\find_gh.bat` | Locate git/gh when a stale PATH hides them |
 | `uninstall.bat` | Remove run-at-login, stop the process, optionally delete config |
 
 ## Plan, credits and resets
@@ -139,7 +179,8 @@ It finds your install through its run-at-login entry (or the running
 process), stops it, installs the latest release over it and starts it again.
 It works for `QuotaTray.exe`, the portable folder and source installs, and
 settings in `%APPDATA%\QuotaTray` are kept. Source installs can also just run
-`update.bat`. This script logs to `%APPDATA%\QuotaTray\update.log`; updates
+`python\update.bat` (a source install from before v1.4.0, which has no
+`python\` folder yet, updates with `git pull` or this script). This script logs to `%APPDATA%\QuotaTray\update.log`; updates
 started from the tray menu log to `%APPDATA%\QuotaTray\quota-tray.log`, and a
 failed one has an *Open log* button.
 
@@ -276,13 +317,15 @@ Log: `%APPDATA%\QuotaTray\quota-tray.log` · Snapshot: `%APPDATA%\QuotaTray\diag
 - Credentials are used only in HTTP `Authorization` / `Cookie` headers, never logged and never sent anywhere else. Tokens are only read, never refreshed, so your Claude Code / Claude Desktop logins stay untouched.
 - One thing is written to disk: the last working Claude Desktop session cookie, DPAPI-encrypted to your Windows account, in `%APPDATA%\QuotaTray\claude-session.bin` (used when Claude Desktop keeps its cookie file locked). Delete it any time.
 - Hosts contacted: `api.anthropic.com`, `claude.ai`, `chatgpt.com` and `127.0.0.1` for quotas; `api.github.com`, `github.com` and `raw.githubusercontent.com` for the daily update check (turn off with `check_updates`).
-- Every quota call lives in the files under `quota_tray/providers/`, the update check in `quota_tray/updater.py`, so the whole surface is short enough to read.
+- Every quota call lives in the files under `python/quota_tray/providers/` (C#: `csharp/src/QuotaTray/Providers/`), the update check in `python/quota_tray/updater.py`, so the whole surface is short enough to read.
 - `probe.bat` redacts tokens and cookies before writing its report, but `_probe.txt` still contains local paths — do not paste it publicly without a look.
 
 ## Development
 
 ```powershell
-python tests\test_providers.py    # 85 offline checks, no network needed
+cd python
+python tests\test_providers.py    # offline checks, no network needed
+dotnet run --project ..\csharp\tests\QuotaTray.Tests   # the C# edition's checks
 ```
 
 The suite drives all three fallback chains with fabricated payloads, covering
@@ -291,16 +334,17 @@ cache, the Electron cookie store, plan / credits / reset parsing, the reset
 reminder, cross-source merging, the IDE-not-running path, cache round-trips and
 countdown formatting.
 
-To cut a release, bump `__version__` in `quota_tray/__init__.py`, then either
+To cut a release, bump `__version__` in `python/quota_tray/__init__.py` and
+`<Version>` in `csharp/src/QuotaTray/QuotaTray.csproj` (the build checks both), then either
 open **Actions → build → Run workflow** and enter the matching version (for
 example `v1.2.1`), which creates the tag and the release, or push a tag:
 
 ```powershell
-.\release.bat                     # or: git tag v1.2.1 && git push origin v1.2.1
+.\scripts\release.bat             # or: git tag v1.2.1 && git push origin v1.2.1
 ```
 
-Either way the [build workflow](.github/workflows/build.yml) attaches the
-executable, the portable zip and the SHA256 sums to the release.
+Either way the [build workflow](.github/workflows/build.yml) attaches both
+editions' executables, the portable zip and the SHA256 sums to the release.
 
 ## Known limitations
 
@@ -336,13 +380,16 @@ MIT — see [LICENSE](LICENSE).
 
 ### 方式一：直接用 exe（不需要 Python）
 
-从 [最新 Release](../../releases/latest) 下载：
+从 [最新 Release](../../releases/latest) 下载。有两个版本，面板、数据来源和设置都一样，任选其一：
 
-| 文件 | 什么时候用 |
-|---|---|
-| `QuotaTray-<版本>-windows-x64.exe` | 单文件，最省事。可以改名为 `QuotaTray.exe`，更新时会保留你的文件名 |
-| `QuotaTray-<版本>-windows-x64-portable.zip` | 解压后运行里面的 `QuotaTray.exe`。启动更快，也更不容易被杀软误报 |
-| `QuotaTray-<版本>-SHA256SUMS.txt` | 校验下载的文件（见下） |
+| 文件 | 版本 | 什么时候用 |
+|---|---|---|
+| `QuotaTray-<版本>-windows-x64.exe` | Python | 单文件，约 15 MB，功能最全（所有兜底路径）。可以改名为 `QuotaTray.exe`，更新时会保留你的文件名 |
+| `QuotaTray-<版本>-windows-x64-portable.zip` | Python | 解压后运行里面的 `QuotaTray.exe`。启动更快，也更不容易被杀软误报 |
+| `QuotaTray-<版本>-csharp-windows-anycpu.exe` | C# | 单文件，**不到 0.2 MB**，秒开。用 Windows 10/11 自带的 .NET Framework 4.8，x64 和 ARM64 都原生运行。见下方 [C# 版](#c-版) |
+| `QuotaTray-<版本>-SHA256SUMS.txt` | | 校验下载的文件（见下） |
+
+不管哪个版本，同一时间只会运行一个 QuotaTray：两个版本共用 `%APPDATA%\QuotaTray` 里的设置，启动其中一个会替换掉另一个。
 
 文件名都带版本号和架构，例如 `QuotaTray-v1.3.2-windows-x64.exe`（v1.3.2 之前的版本用的是不带版本号的旧文件名）。
 
@@ -361,7 +408,7 @@ Get-FileHash .\QuotaTray-v1.3.2-windows-x64.exe -Algorithm SHA256
 
 ```powershell
 git clone https://github.com/yhm138/ai-quota-tray.git
-cd QuotaTray
+cd ai-quota-tray\python
 .\install.bat
 ```
 
@@ -371,7 +418,34 @@ cd QuotaTray
 winget install Python.Python.3.12
 ```
 
+## 目录结构
+
+| 目录 | 内容 |
+|---|---|
+| `python/` | Python 版：`quota_tray/`（程序本体）、`tests/`、`tools/`、`run.pyw` 和各个 `.bat` 脚本 |
+| `csharp/` | C# 版：`src/QuotaTray/`（程序本体）和 `tests/QuotaTray.Tests/` |
+| `scripts/` | 维护者脚本：发布、打 Release、生成 workflow |
+| `update.ps1` | 独立更新脚本（留在根目录，旧版本从这个位置下载它） |
+| `docs/` | 截图 |
+
+## C# 版
+
+用 C# 重写的同一个程序，基于 Windows 10（1903+）/ 11 自带的 .NET Framework 4.8。单个 exe 不到 0.2 MB，不需要解压，启动即开，内存占用也比 Python 版小得多。
+
+数据覆盖相同：Claude（Claude Code 登录，含 WSL；Claude Desktop 自己的登录）、Codex（实时用量接口及套餐、积分、重置，`codex app-server`，会话日志）、Antigravity；同样支持多账号翻页、重置提醒、一键应用内更新、诊断和开机自启。未包含的只有 Python 版作为最后兜底的 claude.ai cookie 路径和 Codex SQLite 扫描。
+
+自己编译需要 .NET SDK（任何系统都能编译）：
+
+```powershell
+dotnet build csharp\src\QuotaTray\QuotaTray.csproj -c Release
+dotnet run --project csharp\tests\QuotaTray.Tests     # 离线测试
+```
+
+`QuotaTray.exe --diagnose` 输出各数据源的探测报告，`--selftest` 在本机检查 AES-GCM、托盘图标和面板。
+
 ## 各个脚本
+
+Python 版的脚本在 `python/`，维护者脚本在 `scripts/`。
 
 | 文件 | 作用 |
 |---|---|
@@ -382,10 +456,10 @@ winget install Python.Python.3.12
 | `preview.bat` | 用假数据画一次面板，确认界面正常 |
 | `claude_login.bat` | 用指定的代理端口启动 Claude Code，方便登录 |
 | `build_exe.bat` | 本地打包出 `dist\QuotaTray.exe` |
-| `publish.bat` | 建 GitHub 仓库并推送（只需一次） |
-| `release.bat` | 打版本 tag，自动构建并发布 Release |
-| `fix_push.bat` | push 失败时重试，并显示完整错误 |
-| `find_gh.bat` | PATH 没刷新导致找不到 git/gh 时定位它们 |
+| `scripts\publish.bat` | 建 GitHub 仓库并推送（只需一次） |
+| `scripts\release.bat` | 打版本 tag，自动构建并发布 Release |
+| `scripts\fix_push.bat` | push 失败时重试，并显示完整错误 |
+| `scripts\find_gh.bat` | PATH 没刷新导致找不到 git/gh 时定位它们 |
 | `uninstall.bat` | 移除开机自启、结束进程、可选删除配置 |
 
 ## 套餐、积分与重置
@@ -407,7 +481,7 @@ irm https://raw.githubusercontent.com/yhm138/ai-quota-tray/main/update.ps1 | iex
 
 脚本会通过开机自启项（或正在运行的进程）找到你的安装位置，停掉它、装上最新版并重新启动。
 exe、便携版、源码安装都适用，`%APPDATA%\QuotaTray` 里的设置会保留。源码安装也可以直接运行
-`update.bat`。这个脚本的记录在 `%APPDATA%\QuotaTray\update.log`；从托盘菜单发起的更新记录在 `%APPDATA%\QuotaTray\quota-tray.log`，更新失败时面板上有 *Open log* 按钮可直接打开。
+`python\update.bat`（v1.4.0 之前的源码安装还没有 `python\` 目录，用 `git pull` 或上面的脚本更新）。这个脚本的记录在 `%APPDATA%\QuotaTray\update.log`；从托盘菜单发起的更新记录在 `%APPDATA%\QuotaTray\quota-tray.log`，更新失败时面板上有 *Open log* 按钮可直接打开。
 
 ## 额度是从哪里读的
 
@@ -489,24 +563,26 @@ Antigravity 内部跑一个语言服务器，启动参数里带 `--csrf_token`�
 - 凭据只用在 HTTP 的 `Authorization` / `Cookie` 头里，不写日志、不发给任何第三方。只读取 token，从不刷新，不会影响你的 Claude Code / Claude Desktop 登录
 - 唯一落盘的是最近一次可用的 Claude Desktop 会话 cookie，用 DPAPI 绑定你的 Windows 账户加密，存在 `%APPDATA%\QuotaTray\claude-session.bin`（Claude Desktop 锁住 cookie 文件时使用），可随时删除
 - 额度查询只连 `api.anthropic.com`、`claude.ai`、`chatgpt.com`、`127.0.0.1`；每日检查更新连 `api.github.com`、`github.com`、`raw.githubusercontent.com`（可用 `check_updates` 关闭）
-- 额度请求都在 `quota_tray/providers/` 里，更新检查在 `quota_tray/updater.py`，整个面很小，可以自己读完
+- 额度请求都在 `python/quota_tray/providers/`（C# 版在 `csharp/src/QuotaTray/Providers/`）里，更新检查在 `python/quota_tray/updater.py`，整个面很小，可以自己读完
 - `probe.bat` 生成报告时会脱敏 token 和 cookie，但 `_probe.txt` 里仍有本机路径，公开粘贴前先看一眼
 
 ## 开发
 
 ```powershell
-python tests\test_providers.py    # 85 项离线测试，不需要联网
+cd python
+python tests\test_providers.py    # 离线测试，不需要联网
+dotnet run --project ..\csharp\tests\QuotaTray.Tests   # C# 版的离线测试
 ```
 
 测试用伪造的响应跑通全部三条兜底链，覆盖 HTTP 401 降级、两种百分比口径（0–1 和 0–100）、窗口键名模糊匹配、跨来源合并、IDE 未运行、缓存往返和倒计时格式。
 
-发布新版本靠打 tag。用 `release.bat` 更稳，它会先确认 workflow 确实在提交里（打了 tag 但仓库里没有 workflow 是不会有任何构建的），提交未保存的改动，推送 tag，然后盯着构建跑完：
+发布新版本靠打 tag。用 `scripts\release.bat` 更稳，它会先确认 workflow 确实在提交里（打了 tag 但仓库里没有 workflow 是不会有任何构建的），提交未保存的改动，推送 tag，然后盯着构建跑完：
 
 ```powershell
-.\release.bat
+.\scripts\release.bat
 ```
 
-或者不用 git：先改 `quota_tray/__init__.py` 里的 `__version__`，再到 **Actions → build → Run workflow** 填入同样的版本号（如 `v1.2.1`），它会自动打 tag 并发布。
+或者不用 git：先改 `python/quota_tray/__init__.py` 里的 `__version__` 和 `csharp/src/QuotaTray/QuotaTray.csproj` 里的 `<Version>`，再到 **Actions → build → Run workflow** 填入同样的版本号（如 `v1.2.1`），它会自动打 tag 并发布。
 
 两种方式都会触发 [构建工作流](.github/workflows/build.yml)，自动把 exe、便携版 zip 和 SHA256 附到 Release 上。
 

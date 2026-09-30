@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.4.0
+
+- **New: a C# edition**, `QuotaTray-<version>-csharp-windows-anycpu.exe`:
+  one file under 0.2 MB on the .NET Framework 4.8 that ships with Windows
+  10/11, starting instantly and running natively on x64 and ARM64. Same
+  panel, data (Claude Code incl. WSL, Claude Desktop's login, Codex usage /
+  plan / credits / resets, Antigravity), multi-account pages, reset
+  reminder, in-app update with progress, diagnostics and run-at-login. It
+  shares `%APPDATA%\QuotaTray` with the Python edition, and only one of the
+  two runs at a time. Left out: the claude.ai cookie fallbacks and the Codex
+  SQLite scan
+- **Tidier repository**: the Python edition moved to `python/`, the C#
+  edition is in `csharp/`, maintainer scripts are in `scripts/`;
+  `update.ps1` stays at the root, where older versions look for it
+- Every release now carries both editions, checked by the same smoke test
+- A source install from before v1.4.0 cannot update itself in-app to this
+  layout: use `git pull` (then run `python\install.bat`) or `update.ps1`
+
 ## v1.3.6
 
 - **Fixed: double-clicking QuotaTray.exe could leave no icon in the tray**

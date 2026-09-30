@@ -11,7 +11,7 @@ if not exist ".venv\Scripts\python.exe" (
 ".venv\Scripts\python.exe" tools\make_icon.py
 ".venv\Scripts\python.exe" -m PyInstaller --noconfirm --clean --onefile --noconsole --optimize 2 ^
     --name QuotaTray ^
-    --icon assets\quotatray.ico ^
+    --icon ..\assets\quotatray.ico ^
     --hidden-import pystray._win32 ^
     --exclude-module cryptography ^
     --exclude-module cffi ^
