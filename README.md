@@ -19,6 +19,18 @@
 
 <p align="center"><b>English</b> · <a href="#chinese">中文说明</a></p>
 
+> [!TIP]
+> **Just want it running? Grab the 176 KB C# edition.**
+> **[`QuotaTray-<version>-csharp-windows-anycpu.exe`](../../releases/latest)** is a
+> **single 176 KB file: download it, double-click it, done.** No Python, no
+> installer, no runtime to download (it uses the .NET Framework built into
+> Windows 10/11), and it starts instantly. Same panel and data as the
+> Python edition. See [the C# edition](#the-c-edition).
+>
+> **只想直接用？下载 176 KB 的 C# 版。**
+> **[`QuotaTray-<版本>-csharp-windows-anycpu.exe`](../../releases/latest)**
+> **只有一个 176 KB 的文件：下载、双击，就能运行。** 不用装 Python，不用安装程序，也不用额外下载运行库（用 Windows 10/11 自带的 .NET Framework），秒开。面板和数据与 Python 版一致，见 [C# 版](#c-版)。
+
 ---
 
 ## What it does
@@ -54,7 +66,7 @@ editions with the same panel, data sources and settings; pick either one:
 |---|---|---|
 | `QuotaTray-<version>-windows-x64.exe` | Python | Single file, ~15 MB. The original; has every fallback path. Rename it to `QuotaTray.exe` if you like; updates keep whatever name it has. |
 | `QuotaTray-<version>-windows-x64-portable.zip` | Python | Unzip and run `QuotaTray.exe` inside. Starts faster and is less likely to trip antivirus. |
-| `QuotaTray-<version>-csharp-windows-anycpu.exe` | C# | Single file, **under 0.2 MB**, starts instantly. Uses the .NET Framework 4.8 built into Windows 10/11, runs natively on x64 and ARM64. See [the C# edition](#the-c-edition). |
+| **`QuotaTray-<version>-csharp-windows-anycpu.exe`** | **C#** | **Recommended. One 176 KB file, double-click to run**, starts instantly. Uses the .NET Framework 4.8 built into Windows 10/11, runs natively on x64 and ARM64. See [the C# edition](#the-c-edition). |
 | `QuotaTray-<version>-SHA256SUMS.txt` | | Verify what you downloaded (see below). |
 
 Only one QuotaTray runs at a time, whichever edition: both share the settings
@@ -110,9 +122,10 @@ winget install Python.Python.3.12
 
 ## The C# edition
 
-The same app written in C# for .NET Framework 4.8, which ships with Windows 10
-(1903+) and 11. It is a single exe under 0.2 MB with nothing to unpack, so it
-starts instantly and uses far less memory than the Python build.
+**A single 176 KB `.exe` you double-click to run.** The same app written in
+C# for .NET Framework 4.8, which ships with Windows 10 (1903+) and 11, so
+there is nothing to install and nothing to unpack: it starts instantly and
+uses far less memory than the ~15 MB Python build.
 
 It covers the same data: Claude (Claude Code logins, including WSL, and
 Claude Desktop's own login), Codex (the live usage API with plan, credits and
@@ -241,6 +254,7 @@ machine. **The IDE has to be open**, otherwise the panel says "IDE not running".
   "warn_percent": 75,              // amber threshold
   "danger_percent": 90,            // red threshold
   "icon_style": "bars",            // "bars" or "ring"
+  "panel_scale": 1.0,              // C# edition: make the panel bigger (1.2) or smaller (0.9)
   "check_updates": true,           // look for a new release once a day
   "promote_tray_icon": true,       // Windows 11: keep the icon out of the ^ overflow
   "remind_unused_resets": true,    // daily notification about banked resets
@@ -386,7 +400,7 @@ MIT — see [LICENSE](LICENSE).
 |---|---|---|
 | `QuotaTray-<版本>-windows-x64.exe` | Python | 单文件，约 15 MB，功能最全（所有兜底路径）。可以改名为 `QuotaTray.exe`，更新时会保留你的文件名 |
 | `QuotaTray-<版本>-windows-x64-portable.zip` | Python | 解压后运行里面的 `QuotaTray.exe`。启动更快，也更不容易被杀软误报 |
-| `QuotaTray-<版本>-csharp-windows-anycpu.exe` | C# | 单文件，**不到 0.2 MB**，秒开。用 Windows 10/11 自带的 .NET Framework 4.8，x64 和 ARM64 都原生运行。见下方 [C# 版](#c-版) |
+| **`QuotaTray-<版本>-csharp-windows-anycpu.exe`** | **C#** | **推荐。单个 176 KB 文件，双击即可运行**，秒开。用 Windows 10/11 自带的 .NET Framework 4.8，x64 和 ARM64 都原生运行。见下方 [C# 版](#c-版) |
 | `QuotaTray-<版本>-SHA256SUMS.txt` | | 校验下载的文件（见下） |
 
 不管哪个版本，同一时间只会运行一个 QuotaTray：两个版本共用 `%APPDATA%\QuotaTray` 里的设置，启动其中一个会替换掉另一个。
@@ -430,7 +444,7 @@ winget install Python.Python.3.12
 
 ## C# 版
 
-用 C# 重写的同一个程序，基于 Windows 10（1903+）/ 11 自带的 .NET Framework 4.8。单个 exe 不到 0.2 MB，不需要解压，启动即开，内存占用也比 Python 版小得多。
+**单个 176 KB 的 `.exe`，双击即可运行。** 用 C# 重写的同一个程序，基于 Windows 10（1903+）/ 11 自带的 .NET Framework 4.8，所以什么都不用装、也不用解压：秒开，内存占用也比约 15 MB 的 Python 版小得多。
 
 数据覆盖相同：Claude（Claude Code 登录，含 WSL；Claude Desktop 自己的登录）、Codex（实时用量接口及套餐、积分、重置，`codex app-server`，会话日志）、Antigravity；同样支持多账号翻页、重置提醒、一键应用内更新、诊断和开机自启。未包含的只有 Python 版作为最后兜底的 claude.ai cookie 路径和 Codex SQLite 扫描。
 
@@ -520,6 +534,7 @@ Antigravity 内部跑一个语言服务器，启动参数里带 `--csrf_token`�
 - `refresh_seconds` — 刷新间隔，最小 60
 - `warn_percent` / `danger_percent` — 变黄、变红的阈值
 - `icon_style` — `bars`（三条用量条）或 `ring`（圆环）
+- `panel_scale` — C# 版面板的缩放倍数，默认 `1.0`，想再大一点可设 `1.2`
 - 每个 provider 的 `enabled` 改成 `false` 就不再采集它
 - 每个 provider 的 `order` 可以调整兜底顺序，或者直接删掉某条路径（比如嫌 `app_server` 每次都要起进程）
 - `check_updates` — 每天检查新版本
