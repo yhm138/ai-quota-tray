@@ -25,7 +25,7 @@ namespace QuotaTray.Providers
         public const string BalanceUrl = "https://api.deepseek.com/user/balance";
         public const string EnvName = "DEEPSEEK_API_KEY";
 
-        /// <summary>Tests replace the folders searched: [(home, label suffix)].</summary>
+        /// <summary>Tests replace the folders searched: [(home, WSL distro or "")].</summary>
         public static Func<JObj, List<KeyValuePair<string, string>>> HomesOverride;
 
         /// <summary>Tests replace the environment.</summary>
@@ -170,17 +170,93 @@ namespace QuotaTray.Providers
             foreach (var distro in Proc.WslDistros())
             {
                 var root = $@"\\wsl.localhost\{distro}";
-                homes.Add(new KeyValuePair<string, string>(Path.Combine(root, "root"), $" - WSL {distro}"));
+                homes.Add(new KeyValuePair<string, string>(Path.Combine(root, "root"), distro));
                 try
                 {
                     var home = Path.Combine(root, "home");
                     if (Directory.Exists(home))
                         foreach (var u in Directory.GetDirectories(home).Take(10))
-                            homes.Add(new KeyValuePair<string, string>(u, $" - WSL {distro}"));
+                            homes.Add(new KeyValuePair<string, string>(u, distro));
                 }
                 catch (Exception) { }
             }
             return homes;
+        }
+
+        // ------------------------------------------------------------ OpenCode CLI vs Desktop
+
+        // OpenCode Desktop keeps its own settings in %APPDATA%\<app id>, but the
+        // OpenCode server it runs reads the same auth.json as the CLI. So on
+        // Windows the two share one key, and every app that uses it is named.
+        // Desktop can also run servers inside WSL distros.
+        public static readonly string[] DesktopAppIds = { "ai.opencode.desktop", "ai.opencode.desktop.beta" };
+        private static readonly string[] CliNames = { "opencode.exe", "opencode.cmd", "opencode" };
+
+        /// <summary>Where the OpenCode CLI is installed for this home, if anywhere.</summary>
+        public static string OpencodeCli(string home, Func<string, string> env, bool local)
+        {
+            if (local)
+                foreach (var dir in (env("PATH") ?? "").Split(Path.PathSeparator))
+                {
+                    var d = dir.Trim().Trim('"');
+                    if (d.Length == 0) continue;
+                    foreach (var n in CliNames)
+                    {
+                        try
+                        {
+                            var p = Path.Combine(d, n);
+                            if (File.Exists(p)) return p;
+                        }
+                        catch (ArgumentException) { }
+                    }
+                }
+            var candidates = CliNames.Select(n => Path.Combine(home, ".opencode", "bin", n)).ToList();
+            candidates.AddRange(new[]
+            {
+                Path.Combine(home, ".bun", "bin", "opencode.exe"), Path.Combine(home, ".bun", "bin", "opencode"),
+                Path.Combine(home, ".local", "bin", "opencode"), Path.Combine(home, ".npm-global", "bin", "opencode"),
+                Path.Combine(home, "scoop", "shims", "opencode.exe"),
+            });
+            if (local)
+            {
+                if (!string.IsNullOrEmpty(env("APPDATA"))) candidates.Add(Path.Combine(env("APPDATA"), "npm", "opencode.cmd"));
+                if (!string.IsNullOrEmpty(env("LOCALAPPDATA")))
+                    candidates.Add(Path.Combine(env("LOCALAPPDATA"), "Microsoft", "WinGet", "Links", "opencode.exe"));
+            }
+            return candidates.FirstOrDefault(Proc.SafeFileExists);
+        }
+
+        /// <summary>(OpenCode Desktop's settings folder or null, WSL distros it runs servers in).</summary>
+        public static Tuple<string, HashSet<string>> OpencodeDesktop(Func<string, string> env)
+        {
+            var distros = new HashSet<string>();
+            var appdata = env("APPDATA");
+            if (string.IsNullOrEmpty(appdata)) return Tuple.Create((string)null, distros);
+            foreach (var id in DesktopAppIds)
+            {
+                var folder = Path.Combine(appdata, id);
+                if (!Proc.SafeDirExists(folder)) continue;
+                var text = Read(Path.Combine(folder, "opencode.settings"));
+                var servers = text != null ? Json.ParseObject(text)?.Obj("wslServers")?.Arr("servers") : null;
+                foreach (var srv in (servers ?? new List<object>()).OfType<JObj>())
+                    if (!string.IsNullOrEmpty(srv.Str("distro"))) distros.Add(srv.Str("distro"));
+                return Tuple.Create(folder, distros);
+            }
+            return Tuple.Create((string)null, distros);
+        }
+
+        /// <summary>Which OpenCode apps use the auth.json of this home.</summary>
+        public static string OpencodeLabel(bool cli, bool desktop, string distro = "", ICollection<string> desktopDistros = null)
+        {
+            var names = new List<string>();
+            if (cli) names.Add("OpenCode CLI");
+            if (string.IsNullOrEmpty(distro))
+            {
+                if (desktop) names.Add("OpenCode Desktop");
+                return names.Count > 0 ? string.Join(" + ", names) : "OpenCode";
+            }
+            if (desktopDistros != null && desktopDistros.Contains(distro)) names.Add("OpenCode Desktop");
+            return (names.Count > 0 ? string.Join(" + ", names) : "OpenCode") + " - WSL " + distro;
         }
 
         private static string Read(string path)
@@ -199,13 +275,16 @@ namespace QuotaTray.Providers
             var manual = Core.Settings.Str(settings, "api_key");
             if (manual.Length > 0) Add(manual, "config.json");
 
+            var desktop = OpencodeDesktop(Env);
             foreach (var h in Homes(settings))
             {
                 var home = h.Key;
-                var suffix = h.Value;
-                var local = suffix.Length == 0;
+                var distro = h.Value ?? "";
+                var suffix = distro.Length > 0 ? " - WSL " + distro : "";
+                var local = distro.Length == 0;
                 if (Core.Settings.Flag(settings, "scan_opencode", true))
                 {
+                    var ocLabel = OpencodeLabel(OpencodeCli(home, Env, local) != null, desktop.Item1 != null, distro, desktop.Item2);
                     var authFiles = new List<string>();
                     if (local && !string.IsNullOrEmpty(Env("OPENCODE_AUTH_JSON"))) authFiles.Add(Env("OPENCODE_AUTH_JSON"));
                     if (local && !string.IsNullOrEmpty(Env("XDG_DATA_HOME"))) authFiles.Add(Path.Combine(Env("XDG_DATA_HOME"), "opencode", "auth.json"));
@@ -224,7 +303,7 @@ namespace QuotaTray.Providers
                             continue;
                         }
                         var keys = OpencodeAuthKeys(data);
-                        foreach (var k in keys) Add(k, "OpenCode" + suffix);
+                        foreach (var k in keys) Add(k, ocLabel);
                         if (keys.Count == 0) notes.Add($"{path}: no DeepSeek key (add one with /connect in OpenCode)");
                     }
                     var configDirs = new List<string>();
@@ -242,7 +321,7 @@ namespace QuotaTray.Providers
                             notes.Add($"{path}: could not be parsed");
                             continue;
                         }
-                        foreach (var k in OpencodeConfigKeys(data, Env)) Add(k, "OpenCode" + suffix);
+                        foreach (var k in OpencodeConfigKeys(data, Env)) Add(k, ocLabel);
                     }
                 }
                 if (Core.Settings.Flag(settings, "scan_dsh", true))
@@ -359,6 +438,15 @@ namespace QuotaTray.Providers
                 return;
             }
             foreach (var note in found.Item2) result.Attempts.Add(new SourceAttempt("key search", false, note));
+            if (Core.Settings.Flag(Settings, "scan_opencode", true))
+            {
+                var desktop = OpencodeDesktop(Env);
+                var cli = OpencodeCli(Paths.Home, Env, true);
+                var detail = $"CLI: {cli ?? "not found"}; Desktop: {desktop.Item1 ?? "not found"}";
+                if (desktop.Item2.Count > 0) detail += $" (WSL servers: {string.Join(", ", desktop.Item2.OrderBy(d => d))})";
+                if (cli != null && desktop.Item1 != null) detail += "; both read the same auth.json, so they share one key";
+                result.Attempts.Add(new SourceAttempt("OpenCode apps", true, detail));
+            }
             // One page per distinct key; every tool holding it is named on it.
             var merged = new List<KeyValuePair<string, List<string>>>();
             foreach (var kv in found.Item1)

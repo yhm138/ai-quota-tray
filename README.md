@@ -262,7 +262,16 @@ The key is read from the tools that already hold it:
 
 Windows and every WSL distro are searched. Each distinct key gets its own page
 (‹ ›), labelled with the tools that hold it; the same key in OpenCode and dsh
-is one page. A key is only ever sent to `api.deepseek.com`, and a key that a
+is one page.
+
+**OpenCode CLI vs OpenCode Desktop**: the page says which one uses the key.
+Desktop keeps its own settings in `%APPDATA%\ai.opencode.desktop`, but the
+OpenCode server it runs reads the same `auth.json` as the CLI, so on Windows
+the two always share one key and the page reads *OpenCode CLI + OpenCode
+Desktop* when both are installed. A key only one of them sees comes from WSL:
+the CLI inside a distro has that distro's own `auth.json`, and so do the WSL
+servers Desktop starts (*OpenCode Desktop - WSL Ubuntu*). Diagnostics lists
+where each app was found. A key is only ever sent to `api.deepseek.com`, and a key that a
 tool points at a relay (its own base URL) is left alone.
 
 ## Configuration
@@ -569,7 +578,9 @@ DeepSeek 的 API 是预充值按量扣费，没有周期额度，所以它放在
 | 3 | **DeepSeek Harness**（`dsh`）：`~/.dsh/.credentials.yaml` 里的 `refs.DEEPSEEK_API_KEY`（*Settings > Models* 保存的位置），其次 `~/.dsh/.env`；设置了 `$DSH_HOME` 就用那个目录 |
 | 4 | 环境变量 `DEEPSEEK_API_KEY` |
 
-Windows 和每个 WSL 发行版都会搜索。每个不同的 Key 单独一页（‹ › 翻页），并标明是哪个工具里的；OpenCode 和 dsh 用的是同一个 Key 时合并成一页。Key 只会发给 `api.deepseek.com`；工具里配置成走中转（自定义 base URL）的 Key 不会被使用。
+Windows 和每个 WSL 发行版都会搜索。每个不同的 Key 单独一页（‹ › 翻页），并标明是哪个工具里的；OpenCode 和 dsh 用的是同一个 Key 时合并成一页。
+
+**OpenCode CLI 和 OpenCode Desktop 会分别标明**。Desktop 自己的设置在 `%APPDATA%\ai.opencode.desktop`，但它内部启动的 OpenCode 服务读的是和 CLI **同一个** `auth.json`，所以在 Windows 上两者用的一定是同一个 Key，两个都装了时页面标为 *OpenCode CLI + OpenCode Desktop*。只有 WSL 里的才会不同：发行版里的 CLI 用那个发行版自己的 `auth.json`，Desktop 在 WSL 里启动的服务也一样（标为 *OpenCode Desktop - WSL Ubuntu*）。Diagnostics 里会列出各自在哪里找到。Key 只会发给 `api.deepseek.com`；工具里配置成走中转（自定义 base URL）的 Key 不会被使用。
 
 ## 配置
 

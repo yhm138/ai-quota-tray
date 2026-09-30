@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.5.1
+
+- **OpenCode CLI and OpenCode Desktop are told apart** on the DeepSeek
+  page: *OpenCode CLI*, *OpenCode Desktop*, or *OpenCode CLI + OpenCode
+  Desktop*. Desktop's own server reads the same auth.json as the CLI, so on
+  Windows they share one key; inside WSL, the CLI of a distro and the WSL
+  servers Desktop starts (read from Desktop's settings) are named per
+  distro. Diagnostics lists where each app was found
+
 ## v1.5.0
 
 - **New: DeepSeek API balance** (both editions). QuotaTray finds the DeepSeek
