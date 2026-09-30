@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.4.2
+
+- **Hover to see the full text**: a long email (or plan, model name,
+  source) that the panel shortens with "..." now shows in full in a
+  tooltip when the mouse rests on it, in both editions. The plan and the
+  account appear on separate lines
+- C# edition: the plan / account line no longer runs past the card's edge
+  when the account page buttons take room
+
 ## v1.4.1
 
 - **C# edition: the panel is as large as the Python one.** On a screen
