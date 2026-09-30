@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The offline checks run on any OS: they compile the app's non-UI code
+       (Core, Providers, Win) for .NET 8 next to this runner. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <RootNamespace>QuotaTray.Tests</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\src\QuotaTray\Core\**\*.cs" Link="App\Core\%(RecursiveDir)%(Filename)%(Extension)" />
+    <Compile Include="..\..\src\QuotaTray\Providers\**\*.cs" Link="App\Providers\%(RecursiveDir)%(Filename)%(Extension)" />
+    <Compile Include="..\..\src\QuotaTray\Win\**\*.cs" Link="App\Win\%(RecursiveDir)%(Filename)%(Extension)" />
+    <Compile Include="..\..\src\QuotaTray\Update\**\*.cs" Link="App\Update\%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+
+</Project>

@@ -126,9 +126,11 @@ def _update_script(repo: str, tag: str) -> Path:
             return target
     except Exception:                                           # noqa: BLE001
         log.info("could not download update.ps1", exc_info=True)
-    local = program_dir() / "update.ps1"
-    if local.is_file():
-        return local
+    # Source checkouts: python/ next to the repo-root update.ps1 (older
+    # checkouts had both in one folder).
+    for local in (program_dir() / "update.ps1", program_dir().parent / "update.ps1"):
+        if local.is_file():
+            return local
     raise RuntimeError("update.ps1 is not available; download the release manually")
 
 

@@ -2,7 +2,7 @@
 
 The workflow files are generated rather than shipped directly because remote
 file tools refuse to write into .github/workflows (they can execute code in CI).
-publish.bat runs this before the first commit; running it again is harmless and
+scripts/publish.bat runs this before the first commit; running it again is harmless and
 only rewrites a file whose contents actually differ.
 """
 from __future__ import annotations
@@ -42,27 +42,43 @@ jobs:
         with:
           python-version: "3.12"
 
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
       - name: Check the version matches the code
         if: startsWith(inputs.version, 'v')
         env:
           WANT: ${{ inputs.version }}
         run: |
-          $have = "v" + (python -c "import quota_tray; print(quota_tray.__version__)")
-          if ($have -ne $env:WANT) { throw "asked to release $env:WANT but the code says $have" }
+          $py = "v" + (python -c "import sys; sys.path.insert(0, 'python'); import quota_tray; print(quota_tray.__version__)")
+          $cs = "v" + ([xml](Get-Content csharp/src/QuotaTray/QuotaTray.csproj)).Project.PropertyGroup[0].Version
+          if ($py -ne $env:WANT) { throw "asked to release $env:WANT but the Python code says $py" }
+          if ($cs -ne $env:WANT) { throw "asked to release $env:WANT but the C# project says $cs" }
 
       - name: Install dependencies
+        working-directory: python
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt "pyinstaller>=6.11"
 
       - name: Generate the application icon
-        run: python tools/make_icon.py
+        run: python python/tools/make_icon.py
+
+      - name: Test and build the C# edition
+        # .NET Framework 4.8 is part of Windows 10/11, so the exe is all a user needs.
+        run: |
+          dotnet run --project csharp/tests/QuotaTray.Tests -c Release
+          if ($LASTEXITCODE -ne 0) { throw "C# tests failed" }
+          dotnet build csharp/src/QuotaTray/QuotaTray.csproj -c Release -o dist/csharp
+          if ($LASTEXITCODE -ne 0) { throw "C# build failed" }
 
       - name: Build the single-file executable
+        working-directory: python
         run: >
           pyinstaller --noconfirm --clean --onefile --noconsole --optimize 2
           --name QuotaTray
-          --icon assets/quotatray.ico
+          --icon ../assets/quotatray.ico
           --hidden-import pystray._win32
           --exclude-module cryptography
           --exclude-module cffi
@@ -89,14 +105,15 @@ jobs:
           --exclude-module xmlrpc
           --exclude-module tkinter.test
           --exclude-module test
-          --distpath dist/onefile
+          --distpath ../dist/onefile
           run.pyw
 
       - name: Build the folder distribution
+        working-directory: python
         run: >
           pyinstaller --noconfirm --clean --onedir --noconsole --optimize 2
           --name QuotaTray
-          --icon assets/quotatray.ico
+          --icon ../assets/quotatray.ico
           --hidden-import pystray._win32
           --exclude-module cryptography
           --exclude-module cffi
@@ -123,7 +140,7 @@ jobs:
           --exclude-module xmlrpc
           --exclude-module tkinter.test
           --exclude-module test
-          --distpath dist/onedir
+          --distpath ../dist/onedir
           run.pyw
 
       - name: Smoke-test both builds
@@ -136,7 +153,8 @@ jobs:
         run: |
           $targets = @(
             "dist\onefile\QuotaTray.exe",
-            "dist\onedir\QuotaTray\QuotaTray.exe"
+            "dist\onedir\QuotaTray\QuotaTray.exe",
+            "dist\csharp\QuotaTray.exe"
           )
           function Invoke-Checked($exe, $arg) {
             # A windowed exe that hits an error dialog would wait forever.
@@ -154,8 +172,8 @@ jobs:
           }
           foreach ($exe in $targets) {
             Invoke-Checked $exe "--diagnose"
-            # Proves what the trimmed build keeps: AES-GCM via Windows CNG,
-            # the tray icon as ICO, HTTPS certificates, Tk and SQLite.
+            # Proves what each build needs works: AES-GCM via Windows CNG,
+            # the tray icon, HTTPS certificates (Python: Tk and SQLite too).
             Invoke-Checked $exe "--selftest"
             Write-Host "$exe ran cleanly"
           }
@@ -167,7 +185,8 @@ jobs:
           INPUT_VERSION: ${{ inputs.version }}
           SHA: ${{ github.sha }}
         # Assets carry the version and architecture, e.g.
-        # QuotaTray-v1.3.2-windows-x64.exe, so downloads can be told apart.
+        # QuotaTray-v1.4.0-windows-x64.exe (Python) and
+        # QuotaTray-v1.4.0-csharp-windows-anycpu.exe (C#, runs on x64 and ARM64).
         run: |
           if ($env:REF -like "refs/tags/v*") { $ver = $env:REF_NAME }
           elseif ($env:INPUT_VERSION) { $ver = $env:INPUT_VERSION }
@@ -179,6 +198,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path release | Out-Null
           Copy-Item dist\onefile\QuotaTray.exe "release\$base.exe"
           Compress-Archive -Path dist\onedir\QuotaTray\* -DestinationPath "release\$base-portable.zip"
+          Copy-Item dist\csharp\QuotaTray.exe "release\QuotaTray-$ver-csharp-windows-anycpu.exe"
           $sums = "release\QuotaTray-$ver-SHA256SUMS.txt"
           Get-ChildItem release -File | Where-Object { $_.Extension -ne ".txt" } | ForEach-Object {
             "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)"
@@ -229,9 +249,11 @@ jobs:
         run: python -m pip install --quiet Pillow requests cryptography
 
       - name: Run the offline test suite
+        working-directory: python
         run: python tests/test_providers.py
 
       - name: Byte-compile every module
+        working-directory: python
         run: python -m compileall -q quota_tray tools run.pyw
 
       - name: Check the shipped code stays pure ASCII
@@ -240,13 +262,29 @@ jobs:
         run: |
           set -e
           bad=0
-          for f in $(git ls-files '*.py' '*.pyw' '*.bat' '*.yml'); do
+          for f in $(git ls-files '*.py' '*.pyw' '*.bat' '*.yml' '*.cs' '*.csproj'); do
             if LC_ALL=C grep -qP '[^\x00-\x7F]' "$f"; then
               echo "non-ASCII bytes in $f"
               bad=1
             fi
           done
           exit $bad
+
+  csharp:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Run the offline C# checks
+        run: dotnet run --project csharp/tests/QuotaTray.Tests -c Release
+
+      # The reference-assemblies package lets any OS compile for .NET Framework 4.8.
+      - name: Compile the Windows app
+        run: dotnet build csharp/src/QuotaTray/QuotaTray.csproj -c Release -warnaserror:CS0104
 """
 
 FILES = {

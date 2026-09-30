@@ -258,9 +258,13 @@ function Invoke-QuotaTrayUpdate {
             Expand-Archive -LiteralPath $payload -DestinationPath $unpacked -Force
             $src = $unpacked
             if ($kind -eq "source") {
-                # GitHub source zips wrap everything in one owner-repo-sha folder.
+                # GitHub source zips wrap everything in one owner-repo-sha folder;
+                # from v1.4.0 the Python app sits in its python/ subfolder.
                 $inner = Get-ChildItem -LiteralPath $unpacked -Directory | Select-Object -First 1
-                if ($inner) { $src = $inner.FullName }
+                if ($inner) {
+                    $src = $inner.FullName
+                    if (Test-Path -LiteralPath (Join-Path $src "python\run.pyw")) { $src = Join-Path $src "python" }
+                }
             }
             & robocopy $src $dir /E /R:5 /W:1 /XD .git .venv venv /NFL /NDL /NJH /NJS /NP | Out-Null
             if ($LASTEXITCODE -ge 8) { throw "copying the new files failed (robocopy exit $LASTEXITCODE)" }

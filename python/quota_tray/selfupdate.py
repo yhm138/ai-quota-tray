@@ -250,6 +250,8 @@ def _install_source(tag: str, repo: str, progress: Progress, after: list[str]) -
         with zipfile.ZipFile(archive) as zf:
             zf.extractall(work / "src")
         inner = next((p for p in (work / "src").iterdir() if p.is_dir()), None)
+        if inner is not None and (inner / "python" / "run.pyw").is_file():
+            inner = inner / "python"             # v1.4.0+: the Python app lives in python/
         if inner is None or not (inner / "run.pyw").is_file():
             raise UpdateError("the source archive does not look like QuotaTray")
         progress(4, STEPS, "Installing...", None)
