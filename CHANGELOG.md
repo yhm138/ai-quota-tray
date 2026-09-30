@@ -1,6 +1,21 @@
 # Changelog
 
-## v1.2.4
+## v1.3.0
+
+- **Several accounts per product.** When the logins on this machine belong to
+  different accounts, the product's card gets **‹ 1/2 ›** buttons, one page
+  per account, each with its own usage, plan, credits and resets:
+  - Claude: Claude Code (Windows `~/.claude`, and each WSL distro) and
+    Claude Desktop are all checked, instead of stopping at the first that
+    works
+  - Codex: the Windows `~/.codex` (shared by the Codex app and the Windows
+    CLI), a custom `CODEX_HOME`, and each WSL distro's `~/.codex`
+  - Logins of the same account share one page; the page says which logins
+    it covers (e.g. *Claude Code + Claude Desktop*)
+- The daily reset reminder and Diagnostics include every account
+- The installed WSL distros are looked up at most every 10 minutes
+
+## v1.2.4 (not released separately; included in v1.3.0)
 
 - **Fixed: after switching Codex accounts the bars kept showing the old
   account** while plan and credits showed the new one, and *Refresh* did not

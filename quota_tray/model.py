@@ -79,6 +79,19 @@ class ProviderResult:
     installed: bool = True                 # is the product present on this machine
     info: list[InfoRow] = field(default_factory=list)       # plan, renewal, credits
     resets: list[ResetGrant] = field(default_factory=list)  # banked limit resets
+    label: str | None = None               # which login this is, e.g. "Claude Desktop"
+    # Other accounts of the same product signed in elsewhere on this machine
+    # (Claude Code vs Claude Desktop, Windows vs WSL Codex), one page each.
+    alternates: list["ProviderResult"] = field(default_factory=list)
+
+    def pages(self) -> list["ProviderResult"]:
+        return [self] + list(self.alternates)
+
+    def adopt(self, page: "ProviderResult") -> None:
+        """Take over everything a single-account page found."""
+        for name in ("ok", "status", "source", "account", "plan", "windows", "data_time",
+                     "info", "resets", "label"):
+            setattr(self, name, getattr(page, name))
 
     def active_resets(self, now: datetime | None = None) -> list[ResetGrant]:
         return sorted(
@@ -127,6 +140,8 @@ class ProviderResult:
                 {"count": g.count, "expires_at": _iso(g.expires_at), "note": g.note}
                 for g in self.resets
             ],
+            "label": self.label,
+            "alternates": [a.to_cache() for a in self.alternates],
         }
 
     @classmethod
@@ -160,6 +175,8 @@ class ProviderResult:
             ResetGrant(int(g.get("count") or 0), parse_time(g.get("expires_at")), g.get("note", ""))
             for g in d.get("resets", []) if isinstance(g, dict)
         ]
+        r.label = d.get("label")
+        r.alternates = [cls.from_cache(a) for a in d.get("alternates", []) if isinstance(a, dict)]
         return r
 
 

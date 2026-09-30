@@ -38,7 +38,7 @@ from ..model import (
 )
 from ..config import app_dir
 from ..win.proc import run
-from .account import fmt_date, minor_amount, money, pretty_plan
+from .account import fmt_date, group_pages, minor_amount, money, pretty_plan
 from .base import Provider, session
 
 log = logging.getLogger(__name__)
@@ -84,18 +84,28 @@ def _label_for(key: str) -> tuple[str, int]:
 # ------------------------------------------------------------ credentials
 
 
+_WSL_CACHE: tuple[float, list[str]] | None = None
+
+
 def _wsl_distros() -> list[str]:
+    """Installed WSL distros, cached for 10 minutes (Claude and Codex both ask
+    on every refresh, and starting wsl.exe is not free)."""
+    global _WSL_CACHE
     if sys.platform != "win32":
         return []
+    import time
+
+    if _WSL_CACHE and time.time() - _WSL_CACHE[0] < 600:
+        return list(_WSL_CACHE[1])
     code, out, _ = run(["wsl.exe", "-l", "-q"], timeout=8, encoding="utf-16-le")
-    if code != 0:
-        return []
     names = []
-    for line in out.replace("\x00", "").splitlines():
-        name = line.strip().strip("\ufeff")
-        if name and "\r" not in name:
-            names.append(name)
-    return names[:6]
+    if code == 0:
+        for line in out.replace("\x00", "").splitlines():
+            name = line.strip().strip("\ufeff")
+            if name and "\r" not in name:
+                names.append(name)
+    _WSL_CACHE = (time.time(), names[:6])
+    return list(_WSL_CACHE[1])
 
 
 def credential_candidates(settings: dict) -> list[Path]:
@@ -162,16 +172,27 @@ def _token_from_file(path: Path) -> tuple[str | None, float | None, str | None]:
 
 
 def discover_oauth_token(settings: dict) -> tuple[str | None, str, str | None, list[str]]:
-    """Return (token, where it came from, plan, diagnostics)."""
+    """Return (token, where it came from, plan, diagnostics) for the first login."""
+    logins, notes = discover_oauth_tokens(settings)
+    if logins:
+        token, origin, plan = logins[0]
+        return token, origin, plan, notes
+    return None, "", None, notes
+
+
+def discover_oauth_tokens(settings: dict) -> tuple[list[tuple[str, str, str | None]], list[str]]:
+    """Every usable Claude Code login: ([(token, where, plan)], diagnostics).
+    Windows and each WSL distro can be signed in to different accounts."""
     notes: list[str] = []
+    logins: list[tuple[str, str, str | None]] = []
 
     manual = (settings.get("oauth_token") or "").strip()
     if manual:
-        return manual, "token from config.json", None, notes
+        logins.append((manual, "token from config.json", None))
 
     env_token = (os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or "").strip()
     if env_token:
-        return env_token, "env CLAUDE_CODE_OAUTH_TOKEN", None, notes
+        logins.append((env_token, "env CLAUDE_CODE_OAUTH_TOKEN", None))
 
     checked = 0
     for path in credential_candidates(settings):
@@ -189,9 +210,19 @@ def discover_oauth_token(settings: dict) -> tuple[str | None, str, str | None, l
         if expires and expires / 1000.0 < now_utc().timestamp() - 60:
             notes.append(f"{path}: token expired (run Claude Code once to refresh it)")
             continue
-        return token, str(path), plan, notes
-    notes.append(f"checked {checked} candidate paths, no usable credentials")
-    return None, "", None, notes
+        if all(token != t for t, _o, _p in logins):
+            logins.append((token, str(path), plan))
+    if not logins:
+        notes.append(f"checked {checked} candidate paths, no usable credentials")
+    return logins, notes
+
+
+def login_label(origin: str) -> str:
+    """'Claude Code', 'Claude Code - WSL Arch', ..."""
+    m = re.match(r"^[\\/]{2}wsl(?:\.localhost|\$)[\\/]([^\\/]+)", origin or "")
+    if m:
+        return f"Claude Code - WSL {m.group(1)}"
+    return "Claude Code"
 
 
 # ------------------------------------------------------------ parsing
@@ -267,8 +298,15 @@ class ClaudeProvider(Provider):
     # ---------------- individual sources
 
     def _try_oauth(self, result: ProviderResult) -> bool:
-        token, origin, plan, notes = discover_oauth_token(self.settings)
-        if not token:
+        pages = self._oauth_pages(result)
+        if pages:
+            result.adopt(pages[0])
+        return bool(pages)
+
+    def _oauth_pages(self, result: ProviderResult) -> list[ProviderResult]:
+        """One page per usable Claude Code login (attempts go on result)."""
+        logins, notes = discover_oauth_tokens(self.settings)
+        if not logins:
             result.attempts.append(
                 SourceAttempt(
                     "OAuth credentials",
@@ -276,9 +314,26 @@ class ClaudeProvider(Provider):
                     "; ".join(notes) or "no Claude Code credentials on this machine",
                 )
             )
-            return False
-        label = f"Claude Code OAuth ({Path(origin).name if os.sep in origin else origin})"
-        return self._usage_with_token(result, token, "OAuth credentials", label, origin, plan)
+            return []
+        pages = []
+        for token, origin, plan in logins:
+            page = ProviderResult(provider_id=self.id, name=self.name, fetched_at=result.fetched_at)
+            where = Path(origin).name if os.sep in origin or "/" in origin else origin
+            if self._usage_with_token(page, token, "OAuth credentials",
+                                      f"Claude Code OAuth ({where})", origin, plan):
+                page.label = login_label(origin)
+                pages.append(page)
+            result.attempts.extend(page.attempts)
+        return pages
+
+    def _desktop_pages(self, result: ProviderResult) -> list[ProviderResult]:
+        page = ProviderResult(provider_id=self.id, name=self.name, fetched_at=result.fetched_at)
+        ok = self._try_desktop_oauth(page)
+        result.attempts.extend(page.attempts)
+        if not ok:
+            return []
+        page.label = "Claude Desktop"
+        return [page]
 
     def _try_desktop_oauth(self, result: ProviderResult) -> bool:
         tag = "Claude Desktop login"
@@ -476,11 +531,20 @@ class ClaudeProvider(Provider):
         # desktop_cookie is such a saved default: add it right before that.
         if "desktop_oauth" not in order and "desktop_cookie" in order:
             order.insert(order.index("desktop_cookie"), "desktop_oauth")
+        # Logins are all checked, not just the first that works: Claude Code
+        # and Claude Desktop (or WSL) can be signed in to different accounts.
+        pages: list[ProviderResult] = []
         for step in order:
-            if step == "oauth" and self._try_oauth(result):
-                return
-            if step == "desktop_oauth" and self._try_desktop_oauth(result):
-                return
+            if step == "oauth":
+                pages += self._oauth_pages(result)
+            elif step == "desktop_oauth":
+                pages += self._desktop_pages(result)
+        if pages:
+            pages = group_pages(pages)
+            result.adopt(pages[0])
+            result.alternates = pages[1:]
+            return
+        for step in order:
             if step == "desktop_cookie" and self._try_cookie(result, None, "Claude Desktop cookie"):
                 return
             if step == "manual_cookie":

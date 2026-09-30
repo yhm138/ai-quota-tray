@@ -418,7 +418,7 @@ class QuotaTrayApp:
         if not self.results:
             lines.append("(no results collected yet)")
         for r in self.results:
-            lines.append(f"-- {r.name} --")
+            lines.append(f"-- {r.name} --" + (f" [{r.label}]" if r.alternates and r.label else ""))
             lines.append(f"   installed: {'yes' if r.installed else 'no'}")
             lines.append(f"   status:    {r.status or '-'}")
             lines.append(f"   source:    {r.source or 'none'}")
@@ -437,6 +437,18 @@ class QuotaTrayApp:
             for g in r.resets:
                 exp = g.expires_at.astimezone().strftime("%Y-%m-%d %H:%M") if g.expires_at else "?"
                 lines.append(f"   reset x{g.count}, expires {exp}" + (f" ({g.note})" if g.note else ""))
+            for n, alt in enumerate(r.alternates, start=2):
+                lines.append(f"   == account page {n}: {alt.label or '?'} ({alt.account or 'unknown'}) ==")
+                lines.append(f"   source:    {alt.source or 'none'}")
+                for w in alt.sorted_windows():
+                    reset = humanize_delta(w.resets_at)
+                    lines.append(f"   * {w.label}: {w.percent_text}"
+                                 + (f"  (resets in {reset})" if reset else ""))
+                for row in alt.info:
+                    lines.append(f"   {row.label or ' '}: {row.value}")
+                for g in alt.resets:
+                    exp = g.expires_at.astimezone().strftime("%Y-%m-%d %H:%M") if g.expires_at else "?"
+                    lines.append(f"   reset x{g.count}, expires {exp}")
             lines.append("")
         return "\n".join(lines)
 
