@@ -436,7 +436,8 @@ class ClaudeProvider(Provider):
             prof_plan, prof_account, rows = claude_profile_info(profile)
             result.plan = prof_plan or result.plan
             result.account = result.account or prof_account
-            result.info = rows + claude_spend_info(payload) + claude_codename_info(payload)
+            result.info = rows + claude_spend_info(payload)
+            result.windows += claude_credit_windows(payload)
             result.resets = claude_resets(payload)
             hidden = hidden_codenames(payload)
             if hidden:
@@ -667,11 +668,13 @@ def claude_spend_info(usage: dict) -> list[InfoRow]:
     return [InfoRow("Extra usage", f"{money(used, currency)} used")]
 
 
-def claude_codename_info(usage: dict) -> list[InfoRow]:
-    """Known code-named entries that are credits rather than limits."""
-    rows = []
+def claude_credit_windows(usage: dict) -> list[QuotaWindow]:
+    """Known code-named credits (the cloud credit) as bars after the limits.
+    Their date is when the credit expires, not a reset, and they are left
+    out of the tray icon's percentage."""
+    out: list[QuotaWindow] = []
     if not isinstance(usage, dict):
-        return rows
+        return out
     for key, label in CODENAME_CREDITS.items():
         node = usage.get(key)
         if not isinstance(node, dict):
@@ -680,11 +683,13 @@ def claude_codename_info(usage: dict) -> list[InfoRow]:
         if used is None:
             continue
         ends = node_reset(node)
-        value = f"{used:.1f}".rstrip("0").rstrip(".") + "% used"
-        if ends:
-            value += f" \u00b7 expires {fmt_date(ends)}"
-        rows.append(InfoRow(label, value, "warn" if used >= 90 else ""))
-    return rows
+        pct = max(0.0, min(100.0, float(used)))
+        out.append(QuotaWindow(
+            key=key, label=label, percent=pct, resets_at=None,
+            detail=f"expires {fmt_date(ends)}" if ends else None,
+            order=60, exhausted=pct >= 99.9, credit=True,
+        ))
+    return out
 
 
 def hidden_codenames(usage: dict) -> list[str]:

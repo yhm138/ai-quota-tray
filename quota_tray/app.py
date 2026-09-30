@@ -690,7 +690,8 @@ def _take_over() -> bool:
 
 def _message_box(text: str, *, error: bool = False) -> None:
     """A plain Windows message box: visible even when the tray never came up."""
-    if sys.platform != "win32":
+    if sys.platform != "win32" or os.environ.get("QUOTATRAY_NO_OPEN"):
+        # Also in unattended runs (the CI smoke test): a modal box would hang.
         if sys.stderr is not None:
             print(text, file=sys.stderr)
         return
@@ -805,15 +806,16 @@ def _main(argv: list[str]) -> int:
             # the copy that is running now takes it over.
             log.info("run-at-login pointed at %s, moving it here", autostart.registered_command())
             autostart.enable()
-    if "--updated-from" in argv:
-        from .selfupdate import cleanup_after_update
+    # Delete what an update left behind (the previous exe), on every start.
+    from .selfupdate import cleanup_after_update
 
+    threading.Thread(target=cleanup_after_update, name="update-cleanup", daemon=True).start()
+    if "--updated-from" in argv:
         try:
             previous = argv[argv.index("--updated-from") + 1]
         except IndexError:
             previous = "?"
         log.info("updated from v%s to v%s", previous, __version__)
-        app.root.after(5000, cleanup_after_update)
         app.panel.set_notice(f"Updated from v{previous} to v{__version__}.", "good")
     if manual:
         # Started by hand: show something, since Windows 11 hides new tray icons.
@@ -823,12 +825,42 @@ def _main(argv: list[str]) -> int:
 
 
 def run_selftest() -> int:
-    """`--selftest`: import everything the frozen build needs; exit 1 if not."""
+    """`--selftest`: prove the frozen build has what it needs; exit 1 if not.
+    The build trims unused libraries, so this exercises what is kept."""
     failures = []
-    for mod in ("pystray", "PIL", "requests", "cryptography", "curl_cffi.requests", "tkinter"):
+
+    def step(name, fn):
         try:
-            __import__(mod)
+            fn()
         except Exception as exc:                                # noqa: BLE001
-            failures.append(f"{mod}: {exc!r}")
+            failures.append(f"{name}: {exc!r}")
+
+    for mod in ("pystray", "requests", "tkinter", "sqlite3", "ssl"):
+        step(mod, lambda m=mod: __import__(m))
+
+    def aes():
+        from .win import aesgcm
+
+        aesgcm.selftest()                    # Windows CNG (bcrypt.dll) on Windows
+
+    def icon():
+        import io
+
+        img = icon_render.render([("claude", 42.0), ("codex", 91.0)])
+        buf = io.BytesIO()
+        img.save(buf, format="ICO")          # what pystray does with the tray icon
+        if not buf.getvalue():
+            raise RuntimeError("empty ICO")
+
+    def https():
+        import ssl
+
+        from .tls import ca_bundle
+
+        ssl.create_default_context(cafile=ca_bundle())
+
+    step("AES-GCM", aes)
+    step("tray icon", icon)
+    step("HTTPS certificates", https)
     _emit(failures or ["selftest OK"])
     return 1 if failures else 0

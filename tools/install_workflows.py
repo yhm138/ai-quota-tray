@@ -53,30 +53,76 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt "pyinstaller>=6.9"
+          python -m pip install -r requirements.txt "pyinstaller>=6.11"
 
       - name: Generate the application icon
         run: python tools/make_icon.py
 
       - name: Build the single-file executable
         run: >
-          pyinstaller --noconfirm --clean --onefile --noconsole
+          pyinstaller --noconfirm --clean --onefile --noconsole --optimize 2
           --name QuotaTray
           --icon assets/quotatray.ico
           --hidden-import pystray._win32
-          --hidden-import PIL._tkinter_finder
-          --collect-all curl_cffi
+          --exclude-module cryptography
+          --exclude-module cffi
+          --exclude-module curl_cffi
+          --exclude-module PIL._avif
+          --exclude-module PIL.AvifImagePlugin
+          --exclude-module PIL._webp
+          --exclude-module PIL.WebPImagePlugin
+          --exclude-module PIL._imagingft
+          --exclude-module PIL._imagingcms
+          --exclude-module PIL.ImageCms
+          --exclude-module PIL._imagingmath
+          --exclude-module PIL._imagingmorph
+          --exclude-module PIL.ImageTk
+          --exclude-module PIL._tkinter_finder
+          --exclude-module PIL.ImageQt
+          --exclude-module setuptools
+          --exclude-module pkg_resources
+          --exclude-module unittest
+          --exclude-module pydoc
+          --exclude-module doctest
+          --exclude-module pdb
+          --exclude-module lib2to3
+          --exclude-module xmlrpc
+          --exclude-module tkinter.test
+          --exclude-module test
           --distpath dist/onefile
           run.pyw
 
       - name: Build the folder distribution
         run: >
-          pyinstaller --noconfirm --clean --onedir --noconsole
+          pyinstaller --noconfirm --clean --onedir --noconsole --optimize 2
           --name QuotaTray
           --icon assets/quotatray.ico
           --hidden-import pystray._win32
-          --hidden-import PIL._tkinter_finder
-          --collect-all curl_cffi
+          --exclude-module cryptography
+          --exclude-module cffi
+          --exclude-module curl_cffi
+          --exclude-module PIL._avif
+          --exclude-module PIL.AvifImagePlugin
+          --exclude-module PIL._webp
+          --exclude-module PIL.WebPImagePlugin
+          --exclude-module PIL._imagingft
+          --exclude-module PIL._imagingcms
+          --exclude-module PIL.ImageCms
+          --exclude-module PIL._imagingmath
+          --exclude-module PIL._imagingmorph
+          --exclude-module PIL.ImageTk
+          --exclude-module PIL._tkinter_finder
+          --exclude-module PIL.ImageQt
+          --exclude-module setuptools
+          --exclude-module pkg_resources
+          --exclude-module unittest
+          --exclude-module pydoc
+          --exclude-module doctest
+          --exclude-module pdb
+          --exclude-module lib2to3
+          --exclude-module xmlrpc
+          --exclude-module tkinter.test
+          --exclude-module test
           --distpath dist/onedir
           run.pyw
 
@@ -92,15 +138,25 @@ jobs:
             "dist\onefile\QuotaTray.exe",
             "dist\onedir\QuotaTray\QuotaTray.exe"
           )
-          foreach ($exe in $targets) {
-            $p = Start-Process -FilePath $exe -ArgumentList "--diagnose" -Wait -PassThru
-            if ($p.ExitCode -ne 0) { throw "$exe exited with $($p.ExitCode)" }
-            # Every bundled dependency (curl_cffi's native libcurl above all) must load.
-            $p = Start-Process -FilePath $exe -ArgumentList "--selftest" -Wait -PassThru
-            if ($p.ExitCode -ne 0) {
-              Get-Content "$env:APPDATA\QuotaTray\diagnostics.txt" -ErrorAction SilentlyContinue
-              throw "$exe --selftest exited with $($p.ExitCode)"
+          function Invoke-Checked($exe, $arg) {
+            # A windowed exe that hits an error dialog would wait forever.
+            $p = Start-Process -FilePath $exe -ArgumentList $arg -PassThru
+            if (-not $p.WaitForExit(120000)) {
+              Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+              Get-Content "$env:APPDATA\QuotaTray\crash.log" -ErrorAction SilentlyContinue
+              throw "$exe $arg did not finish within 2 minutes"
             }
+            if ($p.ExitCode -ne 0) {
+              Get-Content "$env:APPDATA\QuotaTray\crash.log" -ErrorAction SilentlyContinue
+              Get-Content "$env:APPDATA\QuotaTray\diagnostics.txt" -ErrorAction SilentlyContinue
+              throw "$exe $arg exited with $($p.ExitCode)"
+            }
+          }
+          foreach ($exe in $targets) {
+            Invoke-Checked $exe "--diagnose"
+            # Proves what the trimmed build keeps: AES-GCM via Windows CNG,
+            # the tray icon as ICO, HTTPS certificates, Tk and SQLite.
+            Invoke-Checked $exe "--selftest"
             Write-Host "$exe ran cleanly"
           }
 

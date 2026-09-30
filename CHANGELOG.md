@@ -1,5 +1,28 @@
 # Changelog
 
+## v1.3.5
+
+- **Half the size**: the single-file exe went from 29.5 MB to 15.5 MB (the
+  portable zip from 30.2 MB to 15.9 MB):
+  - AES-GCM decryption (cookies, Claude Desktop's login) uses Windows' own
+    CNG (`bcrypt.dll`) instead of the `cryptography` package (~10 MB)
+  - Pillow codecs the tray icon never uses (AVIF alone was 8 MB, WebP, the
+    font engine, color management) are left out
+  - `curl_cffi` is no longer bundled: Claude usage comes from Claude
+    Desktop's login; only the last-resort cookie route loses its Chrome
+    TLS fingerprint
+  - unused standard-library tooling is left out and docstrings stripped
+  - the release build's self-test checks on Windows that everything kept
+    still works (AES-GCM known-answer test, tray icon, HTTPS, Tk, SQLite)
+- **No `.old` file after an update**: a running exe can only be renamed, so
+  the previous version goes to a hidden `.quotatray-trash` folder and the
+  new version deletes it for good as soon as it starts (leftover `.old`
+  files from v1.3.2-v1.3.4 are removed too)
+- **Cloud credit is a bar** like the usage limits, with its expiry date; it
+  is not counted in the tray icon's percentage
+- The build can no longer hang on an error dialog: startup import errors
+  go to `crash.log`, and the smoke test has a time limit
+
 ## v1.3.4
 
 - **Fixed: after an in-app update the new version could break**: a

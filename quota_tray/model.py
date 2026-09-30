@@ -20,6 +20,7 @@ class QuotaWindow:
     detail: str | None = None             # extra note, e.g. "812 / 1,000 left"
     order: int = 100
     exhausted: bool = False
+    credit: bool = False                  # a prepaid credit, not a usage limit
 
     @property
     def percent_text(self) -> str:
@@ -105,7 +106,8 @@ class ProviderResult:
 
     @property
     def worst_percent(self) -> float | None:
-        vals = [w.percent for w in self.windows if w.percent is not None]
+        # Credits (e.g. Claude's cloud credit) are not limits you can hit.
+        vals = [w.percent for w in self.windows if w.percent is not None and not w.credit]
         return max(vals) if vals else None
 
     def sorted_windows(self) -> list[QuotaWindow]:
@@ -132,6 +134,7 @@ class ProviderResult:
                     "detail": w.detail,
                     "order": w.order,
                     "exhausted": w.exhausted,
+                    "credit": w.credit,
                 }
                 for w in self.windows
             ],
@@ -164,6 +167,7 @@ class ProviderResult:
                 detail=w.get("detail"),
                 order=w.get("order", 100),
                 exhausted=bool(w.get("exhausted")),
+                credit=bool(w.get("credit")),
             )
             for w in d.get("windows", [])
         ]

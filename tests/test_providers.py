@@ -732,10 +732,12 @@ pc.detect = lambda: True
 r = pc.fetch()
 labels = [w.label for w in r.sorted_windows()]
 check("code names are not usage bars", labels == ["5-hour window", "7-day window", "7-day Opus",
-                                                  "7-day overage allowance"], labels)
-cloud = next((i for i in r.info if i.label == "Cloud credit"), None)
-check("iguana_necktie is the cloud credit", cloud is not None
-      and cloud.value.startswith("7.5% used") and "expires" in cloud.value, r.info)
+                                                  "7-day overage allowance", "Cloud credit"], labels)
+cloud = next((w for w in r.windows if w.label == "Cloud credit"), None)
+check("iguana_necktie is the cloud credit bar", cloud is not None and cloud.percent == 7.5
+      and cloud.credit and (cloud.detail or "").startswith("expires"), cloud)
+check("cloud credit is last and not in the tray percentage",
+      r.sorted_windows()[-1].label == "Cloud credit" and r.worst_percent == 45.0, r.worst_percent)
 check("hidden experiments listed in diagnostics", any(
     a.name == "internal quotas (not shown)" and "nimbus_quill 0%" in a.detail for a in r.attempts),
       [a.detail for a in r.attempts])
@@ -894,9 +896,15 @@ d = Path(tempfile.mkdtemp())
 files = {new_name: b"NEW VERSION"}
 files["QuotaTray-v9.0.0-SHA256SUMS.txt"] = sums_for(files)
 plan, steps, err = run_install(d, files)
+parked = list((d / selfupdate.TRASH_DIR).glob("QuotaTray.exe.*"))
 check("exe update installs while the old one runs", err is None
       and (d / "QuotaTray.exe").read_bytes() == b"NEW VERSION"
-      and (d / "QuotaTray.exe.old").read_bytes() == b"old version", err)
+      and not (d / "QuotaTray.exe.old").exists()
+      and len(parked) == 1 and parked[0].read_bytes() == b"old version", (err, parked))
+(d / "QuotaTray-v1.3.3.exe.old").write_bytes(b"left by v1.3.3")
+check("the new version deletes the previous exe for good",
+      selfupdate.cleanup_after_update(d, attempts=1)
+      and sorted(p.name for p in d.iterdir()) == ["QuotaTray.exe"], sorted(p.name for p in d.iterdir()))
 check("progress goes through every step", sorted({s for s, _ in steps}) == [1, 2, 3, 4], steps[-3:])
 check("new version waits for the old one", plan and "--wait-pid" in plan.command
       and plan.command[0] == str(d / "QuotaTray.exe"), plan and plan.command)
