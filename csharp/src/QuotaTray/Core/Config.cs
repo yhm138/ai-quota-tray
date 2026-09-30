@@ -97,6 +97,14 @@ namespace QuotaTray.Core
       ""port"": 0,
       ""show_models"": true,
       ""max_models"": 6
+    },
+    ""deepseek"": {
+      ""enabled"": true,
+      ""api_key"": """",
+      ""scan_opencode"": true,
+      ""scan_dsh"": true,
+      ""scan_wsl"": true,
+      ""low_balance"": 5
     }
   }
 }");

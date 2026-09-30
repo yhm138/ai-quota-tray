@@ -48,7 +48,8 @@ def pretty_plan(raw: str | None) -> str | None:
 
 
 def money(amount, currency: str | None = "USD") -> str:
-    symbol = {"USD": "$", "EUR": "\u20ac", "GBP": "\u00a3"}.get((currency or "USD").upper())
+    symbol = {"USD": "$", "EUR": "\u20ac", "GBP": "\u00a3", "CNY": "\u00a5", "RMB": "\u00a5"}.get(
+        (currency or "USD").upper())
     return f"{symbol}{amount:,.2f}" if symbol else f"{amount:,.2f} {currency}"
 
 

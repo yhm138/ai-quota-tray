@@ -49,6 +49,10 @@ per product. Click it and the panel (screenshot above) shows, per product:
 - **Banked limit resets**: the one-time resets Anthropic and OpenAI hand out,
   how many are unused and when the first one expires. A notification reminds
   you once a day while any are unused.
+- **Two tabs**: *Subscriptions* (Claude, Codex, Antigravity) and *Pay as you
+  go*, where the **DeepSeek API balance** of the key that OpenCode or DeepSeek
+  Harness (dsh) keeps is shown: total, topped up and granted, amber when it
+  runs low. Each tab scrolls when its cards do not fit on the screen.
 
 No sign-in. It reads credentials that already exist on your machine from
 whichever tool put them there (including Claude Desktop's own login), and
@@ -243,6 +247,24 @@ process, then calls the server's local Connect RPC `GetUserStatus` for the
 prompt-credit balance and each model's remaining quota. Nothing leaves your
 machine. **The IDE has to be open**, otherwise the panel says "IDE not running".
 
+### DeepSeek (pay as you go)
+
+DeepSeek bills API keys against a prepaid balance, so this card sits on the
+*Pay as you go* tab and shows what is left, from `api.deepseek.com/user/balance`.
+The key is read from the tools that already hold it:
+
+| Order | Source |
+|---|---|
+| 1 | `api_key` in config.json |
+| 2 | **OpenCode**: `~/.local/share/opencode/auth.json` (what `/connect` saves) and `provider.deepseek.options.apiKey` in `~/.config/opencode/opencode.json`, `{env:NAME}` included |
+| 3 | **DeepSeek Harness** (`dsh`): `refs.DEEPSEEK_API_KEY` in `~/.dsh/.credentials.yaml` (what *Settings > Models* saves), then `~/.dsh/.env`; `$DSH_HOME` moves the folder |
+| 4 | the `DEEPSEEK_API_KEY` environment variable |
+
+Windows and every WSL distro are searched. Each distinct key gets its own page
+(‹ ›), labelled with the tools that hold it; the same key in OpenCode and dsh
+is one page. A key is only ever sent to `api.deepseek.com`, and a key that a
+tool points at a relay (its own base URL) is left alone.
+
 ## Configuration
 
 `%APPDATA%\QuotaTray\config.json` (tray menu → *Open config file*). Restart to apply.
@@ -280,6 +302,14 @@ machine. **The IDE has to be open**, otherwise the panel says "IDE not running".
       "port": 0,
       "show_models": true,
       "max_models": 6
+    },
+    "deepseek": {
+      "enabled": true,
+      "api_key": "",               // manual fallback
+      "scan_opencode": true,
+      "scan_dsh": true,
+      "scan_wsl": true,
+      "low_balance": 5             // amber below this (in the account's currency)
     }
   }
 }
@@ -330,7 +360,7 @@ Log: `%APPDATA%\QuotaTray\quota-tray.log` · Snapshot: `%APPDATA%\QuotaTray\diag
 
 - Credentials are used only in HTTP `Authorization` / `Cookie` headers, never logged and never sent anywhere else. Tokens are only read, never refreshed, so your Claude Code / Claude Desktop logins stay untouched.
 - One thing is written to disk: the last working Claude Desktop session cookie, DPAPI-encrypted to your Windows account, in `%APPDATA%\QuotaTray\claude-session.bin` (used when Claude Desktop keeps its cookie file locked). Delete it any time.
-- Hosts contacted: `api.anthropic.com`, `claude.ai`, `chatgpt.com` and `127.0.0.1` for quotas; `api.github.com`, `github.com` and `raw.githubusercontent.com` for the daily update check (turn off with `check_updates`).
+- Hosts contacted: `api.anthropic.com`, `claude.ai`, `chatgpt.com`, `api.deepseek.com` and `127.0.0.1` for quotas; `api.github.com`, `github.com` and `raw.githubusercontent.com` for the daily update check (turn off with `check_updates`).
 - Every quota call lives in the files under `python/quota_tray/providers/` (C#: `csharp/src/QuotaTray/Providers/`), the update check in `python/quota_tray/updater.py`, so the whole surface is short enough to read.
 - `probe.bat` redacts tokens and cookies before writing its report, but `_probe.txt` still contains local paths — do not paste it publicly without a look.
 
@@ -387,6 +417,7 @@ MIT — see [LICENSE](LICENSE).
 - **账号信息**：套餐与状态（Claude 套餐已取消会显示为黄色）、订阅开始或续费日期、Claude 额外用量、Codex 积分。
 - **多账号**：Claude Code 和 Claude Desktop（或 Windows 与 WSL 里的 Codex）登录的是不同账号时，卡片上会出现 ‹ › 按钮，每个账号一页。
 - **可用的额度重置**：Anthropic 和 OpenAI 发放的一次性重置，还剩几次、最早哪天过期。只要还有没用的，每天会弹一次提醒。
+- **两个标签页**：*Subscriptions*（订阅制：Claude、Codex、Antigravity）和 *Pay as you go*（按量计费）。按量计费页显示 OpenCode 或 DeepSeek Harness（dsh）里保存的 **DeepSeek API Key 的余额**：总余额、充值部分和赠送部分，余额偏低时变黄。卡片太多、屏幕放不下时，每个标签页都可以滚动。
 
 **不需要登录**。它读取你机器上各个工具已经写好的凭据（包括 Claude Desktop 自己的登录），而且每个产品都有**多条兜底路径**，某一条不通时自动换下一条。新版本在托盘菜单里一键安装。
 
@@ -527,6 +558,19 @@ Codex 会**跨来源合并**，而不是拿到第一个结果就停：线上接�
 
 Antigravity 内部跑一个语言服务器，启动参数里带 `--csrf_token`，并在 `127.0.0.1` 上监听随机端口。QuotaTray 从运行中的进程读出 token 和端口，再调它本地的 Connect RPC `GetUserStatus`，拿到 prompt credits 余额和每个模型的剩余额度。**数据不出本机**。**IDE 必须开着**，关掉后面板会显示 "IDE not running"。
 
+### DeepSeek（按量计费）
+
+DeepSeek 的 API 是预充值按量扣费，没有周期额度，所以它放在 *Pay as you go* 标签页，显示 `api.deepseek.com/user/balance` 返回的余额。Key 从已经保存它的工具里读取：
+
+| 顺序 | 来源 |
+|---|---|
+| 1 | config.json 里手填的 `api_key` |
+| 2 | **OpenCode**：`~/.local/share/opencode/auth.json`（`/connect` 保存的位置），以及 `~/.config/opencode/opencode.json` 里的 `provider.deepseek.options.apiKey`（支持 `{env:变量名}`） |
+| 3 | **DeepSeek Harness**（`dsh`）：`~/.dsh/.credentials.yaml` 里的 `refs.DEEPSEEK_API_KEY`（*Settings > Models* 保存的位置），其次 `~/.dsh/.env`；设置了 `$DSH_HOME` 就用那个目录 |
+| 4 | 环境变量 `DEEPSEEK_API_KEY` |
+
+Windows 和每个 WSL 发行版都会搜索。每个不同的 Key 单独一页（‹ › 翻页），并标明是哪个工具里的；OpenCode 和 dsh 用的是同一个 Key 时合并成一页。Key 只会发给 `api.deepseek.com`；工具里配置成走中转（自定义 base URL）的 Key 不会被使用。
+
 ## 配置
 
 配置在 `%APPDATA%\QuotaTray\config.json`（托盘菜单 → *Open config file*），改完重启生效。字段说明见上方英文部分的 JSON 注释，几个常用的：
@@ -540,6 +584,7 @@ Antigravity 内部跑一个语言服务器，启动参数里带 `--csrf_token`�
 - `check_updates` — 每天检查新版本
 - `promote_tray_icon` — Windows 11 下把托盘图标固定显示在任务栏上，而不是藏在 ^ 里（你自己在设置里改过的不会被覆盖）
 - `remind_unused_resets` / `reset_reminder_hour` — 未使用重置的每日提醒及其时间
+- `providers.deepseek.low_balance` — DeepSeek 余额低于这个数（按账户币种）时变黄，默认 5；`api_key` 可以手填 Key
 
 ## 排错
 
@@ -577,7 +622,7 @@ Antigravity 内部跑一个语言服务器，启动参数里带 `--csrf_token`�
 
 - 凭据只用在 HTTP 的 `Authorization` / `Cookie` 头里，不写日志、不发给任何第三方。只读取 token，从不刷新，不会影响你的 Claude Code / Claude Desktop 登录
 - 唯一落盘的是最近一次可用的 Claude Desktop 会话 cookie，用 DPAPI 绑定你的 Windows 账户加密，存在 `%APPDATA%\QuotaTray\claude-session.bin`（Claude Desktop 锁住 cookie 文件时使用），可随时删除
-- 额度查询只连 `api.anthropic.com`、`claude.ai`、`chatgpt.com`、`127.0.0.1`；每日检查更新连 `api.github.com`、`github.com`、`raw.githubusercontent.com`（可用 `check_updates` 关闭）
+- 额度查询只连 `api.anthropic.com`、`claude.ai`、`chatgpt.com`、`api.deepseek.com`、`127.0.0.1`；每日检查更新连 `api.github.com`、`github.com`、`raw.githubusercontent.com`（可用 `check_updates` 关闭）
 - 额度请求都在 `python/quota_tray/providers/`（C# 版在 `csharp/src/QuotaTray/Providers/`）里，更新检查在 `python/quota_tray/updater.py`，整个面很小，可以自己读完
 - `probe.bat` 生成报告时会脱敏 token 和 cookie，但 `_probe.txt` 里仍有本机路径，公开粘贴前先看一眼
 

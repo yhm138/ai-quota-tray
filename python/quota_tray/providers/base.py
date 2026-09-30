@@ -30,6 +30,7 @@ def session() -> requests.Session:
 class Provider(ABC):
     id: str = "?"
     name: str = "?"
+    billing: str = "subscription"          # which panel tab: "subscription" or "payg"
 
     def __init__(self, config: Config):
         self.config = config
@@ -48,7 +49,8 @@ class Provider(ABC):
         """Walk the fallback chain, filling in result.windows / result.attempts."""
 
     def fetch(self) -> ProviderResult:
-        result = ProviderResult(provider_id=self.id, name=self.name, fetched_at=now_utc())
+        result = ProviderResult(provider_id=self.id, name=self.name, fetched_at=now_utc(),
+                                billing=self.billing)
         try:
             result.installed = self.detect()
         except Exception as exc:                                # noqa: BLE001
@@ -73,6 +75,8 @@ def build_providers(config: Config) -> list[Provider]:
     from .antigravity import AntigravityProvider
     from .claude import ClaudeProvider
     from .codex import CodexProvider
+    from .deepseek import DeepSeekProvider
 
-    providers = [ClaudeProvider(config), CodexProvider(config), AntigravityProvider(config)]
+    providers = [ClaudeProvider(config), CodexProvider(config), AntigravityProvider(config),
+                 DeepSeekProvider(config)]
     return [p for p in providers if p.enabled]

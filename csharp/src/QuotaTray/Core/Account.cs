@@ -77,7 +77,8 @@ namespace QuotaTray.Core
         public static string Money(double amount, string currency = "USD")
         {
             var cur = (currency ?? "USD").ToUpperInvariant();
-            string symbol = cur == "USD" ? "$" : cur == "EUR" ? "\u20ac" : cur == "GBP" ? "\u00a3" : null;
+            string symbol = cur == "USD" ? "$" : cur == "EUR" ? "\u20ac" : cur == "GBP" ? "\u00a3"
+                : cur == "CNY" || cur == "RMB" ? "\u00a5" : null;
             var num = amount.ToString("#,0.00", Inv);
             return symbol != null ? symbol + num : $"{num} {currency}";
         }

@@ -10,6 +10,9 @@ namespace QuotaTray.Providers
         public abstract string Id { get; }
         public abstract string Name { get; }
 
+        /// <summary>Which panel tab: "subscription" or "payg" (pay as you go).</summary>
+        public virtual string Billing => "subscription";
+
         protected readonly Config Config;
         public JObj Settings;
 
@@ -32,7 +35,7 @@ namespace QuotaTray.Providers
 
         public ProviderResult Fetch()
         {
-            var result = new ProviderResult(Id, Name) { FetchedAt = Time.Now };
+            var result = new ProviderResult(Id, Name) { FetchedAt = Time.Now, Billing = Billing };
             try
             {
                 result.Installed = DetectOverride != null ? DetectOverride() : Detect();
@@ -65,7 +68,8 @@ namespace QuotaTray.Providers
 
         public static List<Provider> Build(Config config)
         {
-            var all = new List<Provider> { new ClaudeProvider(config), new CodexProvider(config), new AntigravityProvider(config) };
+            var all = new List<Provider> { new ClaudeProvider(config), new CodexProvider(config), new AntigravityProvider(config),
+                new DeepSeekProvider(config) };
             return all.Where(p => p.Enabled).ToList();
         }
 

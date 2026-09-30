@@ -60,7 +60,17 @@ namespace QuotaTray.UI
         private Hit _hover;
         private readonly TextBox _diag;
         private string _mode = "usage";
-        private Font _fTitle, _fBody, _fSmall, _fPct, _fMono;
+        private Font _fTitle, _fBody, _fBodyBold, _fSmall, _fPct, _fMono;
+
+        // Tabs and the scrolling card area.
+        private string _tab = "subscription";         // subscription | payg
+        private int _scroll;                           // pixels scrolled down in the card area
+        private int _maxBody = int.MaxValue;           // tallest the card area may be
+        private int _contentH, _visibleH;              // card area: full and shown height
+        private Rectangle _viewport;                   // card area on the panel
+        private Rectangle? _clip;                      // hit areas outside it do not count
+        private Rectangle _thumb;                      // scrollbar thumb, empty when not scrolling
+        private int? _dragFrom;                        // thumb drag: mouse y minus thumb top
         private float _scale = 1f;
         private int _dpi;
 
@@ -152,9 +162,10 @@ namespace QuotaTray.UI
         {
             _dpi = DpiAt(Cursor.Position);
             _scale = _dpi / 96f * Math.Max(0.5f, Math.Min(3f, UserScale));
-            foreach (var f in new[] { _fTitle, _fBody, _fSmall, _fPct, _fMono }) f?.Dispose();
+            foreach (var f in new[] { _fTitle, _fBody, _fBodyBold, _fSmall, _fPct, _fMono }) f?.Dispose();
             _fTitle = new Font("Segoe UI", 15 * _scale, FontStyle.Bold, GraphicsUnit.Pixel);
             _fBody = new Font("Segoe UI", 12 * _scale, GraphicsUnit.Pixel);
+            _fBodyBold = new Font("Segoe UI", 12 * _scale, FontStyle.Bold, GraphicsUnit.Pixel);
             _fSmall = new Font("Segoe UI", 11 * _scale, GraphicsUnit.Pixel);
             _fPct = new Font("Consolas", 13 * _scale, FontStyle.Bold, GraphicsUnit.Pixel);
             _fMono = new Font("Consolas", 12 * _scale, GraphicsUnit.Pixel);
@@ -227,8 +238,16 @@ namespace QuotaTray.UI
                 MakeFonts();
             var width = S(_mode == "diagnostics" ? DiagWidth : BaseWidth);
             int height;
-            using (var g = CreateGraphics()) height = LayoutPanel(g, width, false);
             var area = Screen.FromPoint(Cursor.Position).WorkingArea;
+            using (var g = CreateGraphics())
+            {
+                // Measure everything, then give the cards what the screen has left.
+                _maxBody = int.MaxValue;
+                var full = LayoutPanel(g, width, false);
+                _maxBody = Math.Max(S(80), area.Height - S(24) - (full - _visibleH));
+                height = LayoutPanel(g, width, false);
+            }
+            _scroll = Math.Max(0, Math.Min(_scroll, _contentH - _visibleH));
             height = Math.Min(height, area.Height - S(20));
             Size = new Size(width, height);
             if (_mode == "diagnostics")
@@ -297,14 +316,17 @@ namespace QuotaTray.UI
             var text = Ellipsis(full, limit);
             var size = Measure(g, text, font);
             Draw(g, draw, text, font, color, x, y);
-            if (draw && (text != full || tip != null)) _tips.Add(new KeyValuePair<Rectangle, string>(
-                new Rectangle(x, y, size.Width, size.Height), tip ?? full));
+            var area = new Rectangle(x, y, size.Width, size.Height);
+            if (_clip != null) area = Rectangle.Intersect(area, _clip.Value);
+            if (draw && (text != full || tip != null) && !area.IsEmpty)
+                _tips.Add(new KeyValuePair<Rectangle, string>(area, tip ?? full));
             return size;
         }
 
         private void AddHit(bool draw, Rectangle r, Action a, bool primary = false)
         {
-            if (draw) _hits.Add(new Hit { Rect = r, Action = a, Primary = primary });
+            if (_clip != null) r = Rectangle.Intersect(r, _clip.Value);
+            if (draw && !r.IsEmpty) _hits.Add(new Hit { Rect = r, Action = a, Primary = primary });
         }
 
         /// <summary>Lays out (and with draw, paints) the whole panel; returns its height.</summary>
@@ -326,6 +348,7 @@ namespace QuotaTray.UI
             Draw(g, draw, sub, _fSmall, Theme.FgFaint, width - pad - subSize.Width, y + S(4));
             y += Measure(g, title, _fTitle).Height + S(2);
 
+            if (_mode == "usage") y = Tabs(g, draw, width, y + S(8));
             if (_notice != null && _mode == "usage") y = NoticeBar(g, draw, width, y + S(6));
             y += S(4);
 
@@ -338,15 +361,31 @@ namespace QuotaTray.UI
                 if (_diag.Bounds != inner) _diag.Bounds = inner;
                 y = box.Bottom;
             }
-            else if (_results.Count == 0)
-            {
-                y += S(20);
-                Draw(g, draw, "Loading...", _fBody, Theme.FgDim, pad, y);
-                y += _fBody.Height + S(20);
-            }
             else
             {
-                foreach (var r in _results) y = Card(g, draw, width, y + S(6), r) + S(6);
+                // The cards scroll inside a viewport when they do not fit.
+                _contentH = Cards(g, false, width, 0);
+                _visibleH = Math.Min(_contentH, _maxBody);
+                _viewport = new Rectangle(0, y, width, _visibleH);
+                if (draw)
+                {
+                    var scroll = Math.Max(0, Math.Min(_scroll, _contentH - _visibleH));
+                    g.SetClip(_viewport);
+                    _clip = _viewport;
+                    Cards(g, true, width, y - scroll);
+                    _clip = null;
+                    g.ResetClip();
+                    _thumb = Rectangle.Empty;
+                    if (_contentH > _visibleH)
+                    {
+                        var trackH = _visibleH - S(8);
+                        var thumbH = Math.Max(S(24), trackH * _visibleH / _contentH);
+                        var top = y + S(4) + (trackH - thumbH) * scroll / Math.Max(1, _contentH - _visibleH);
+                        _thumb = new Rectangle(width - S(9), top, S(5), thumbH);
+                        Theme.FillRounded(g, _dragFrom != null ? Theme.FgDim : Theme.FgFaint, _thumb, S(2.5f));
+                    }
+                }
+                y += _visibleH;
             }
 
             // footer
@@ -374,6 +413,73 @@ namespace QuotaTray.UI
                 Draw(g, draw, foot, _fSmall, Theme.FgFaint, width - pad - fs.Width, y + (bh - fs.Height) / 2 + S(2));
             y += bh + pad;
             return y;
+        }
+
+        private List<ProviderResult> TabResults(string tab) =>
+            _results.Where(r => (string.IsNullOrEmpty(r.Billing) ? "subscription" : r.Billing) == tab).ToList();
+
+        /// <summary>Subscriptions | Pay as you go, above the cards.</summary>
+        private int Tabs(Graphics g, bool draw, int width, int y)
+        {
+            var pad = S(Pad);
+            var x = pad;
+            var h = _fBody.Height;
+            foreach (var t in new[] { Tuple.Create("subscription", "Subscriptions"), Tuple.Create("payg", "Pay as you go") })
+            {
+                var count = TabResults(t.Item1).Count;
+                var active = t.Item1 == _tab;
+                var text = count > 0 ? $"{t.Item2}  {count}" : t.Item2;
+                var font = active ? _fBodyBold : _fBody;
+                var size = Measure(g, text, font);
+                var hovered = _hover != null && _hover.Rect.Contains(new Point(x + 1, y + 1)) && _hover.Rect.X == x - S(2);
+                Draw(g, draw, text, font, active ? Theme.Fg : hovered ? Theme.FgDim : Theme.FgFaint, x, y);
+                if (draw && active)
+                    using (var b = new SolidBrush(Theme.Accent)) g.FillRectangle(b, x, y + h + S(4), size.Width, S(2));
+                var key = t.Item1;
+                AddHit(draw, new Rectangle(x - S(2), y - S(2), size.Width + S(4), h + S(8)), () => SelectTab(key));
+                x += size.Width + S(18);
+            }
+            y += h + S(6);
+            if (draw) using (var b = new SolidBrush(Theme.Border)) g.FillRectangle(b, pad, y, width - 2 * pad, 1);
+            return y + 1;
+        }
+
+        /// <summary>Lay out and paint the current tab into a bitmap (--selftest).</summary>
+        public Bitmap Snapshot()
+        {
+            Render();
+            var bmp = new Bitmap(Width, Height);
+            DrawToBitmap(bmp, new Rectangle(0, 0, Width, Height));
+            return bmp;
+        }
+
+        public void SelectTab(string tab)
+        {
+            if (tab != _tab)
+            {
+                _tab = tab;
+                _scroll = 0;
+            }
+            Render();
+        }
+
+        /// <summary>The selected tab's cards from y; returns the height they take.</summary>
+        private int Cards(Graphics g, bool draw, int width, int y)
+        {
+            var top = y;
+            var pad = S(Pad);
+            var results = TabResults(_tab);
+            if (_results.Count == 0 || results.Count == 0)
+            {
+                var text = _results.Count == 0 ? "Loading..."
+                    : _tab == "payg" ? "No pay-as-you-go API keys found.\nQuotaTray reads the DeepSeek key that OpenCode or DeepSeek Harness (dsh) keeps, or DEEPSEEK_API_KEY."
+                    : "No subscriptions found on this machine.";
+                var size = MeasureWrapped(g, text, _fBody, width - 2 * pad);
+                DrawWrapped(g, draw, text, _fBody, Theme.FgDim, new Rectangle(pad, y + S(20), width - 2 * pad, size.Height + 2));
+                return size.Height + S(40);
+            }
+            foreach (var r in results) y = Card(g, draw, width, y + S(6), r) + S(6);
+            return y - top;
         }
 
         private Rectangle Button(Graphics g, bool draw, string text, int x, int y, bool primary, Action action, Color? bgOverride = null)
@@ -509,7 +615,8 @@ namespace QuotaTray.UI
             }
             y += titleH;
 
-            if (pages.Count > 1 && !string.IsNullOrEmpty(result.Label))
+            // Which login this is; for an API key, always say which tool holds it.
+            if (!string.IsNullOrEmpty(result.Label) && (pages.Count > 1 || result.Billing == "payg"))
             {
                 y += S(2);
                 Draw(g, draw, result.Label, _fSmall, Theme.FgDim, left, y);
@@ -606,6 +713,13 @@ namespace QuotaTray.UI
         protected override void OnMouseMove(MouseEventArgs e)
         {
             base.OnMouseMove(e);
+            if (_dragFrom != null)
+            {
+                var trackH = _visibleH - S(8) - _thumb.Height;
+                var top = e.Y - _dragFrom.Value - (_viewport.Y + S(4));
+                ScrollTo(trackH <= 0 ? 0 : top * (_contentH - _visibleH) / trackH);
+                return;
+            }
             var h = HitAt(e.Location);
             Cursor = h != null ? Cursors.Hand : Cursors.Default;
             if (h != _hover)
@@ -633,6 +747,47 @@ namespace QuotaTray.UI
                 _tipShown = null;
                 _tip.Hide(this);
             }
+        }
+
+        private void ScrollTo(int value)
+        {
+            var max = Math.Max(0, _contentH - _visibleH);
+            var next = Math.Max(0, Math.Min(max, value));
+            if (next == _scroll) return;
+            _scroll = next;
+            if (_tipShown != null)
+            {
+                _tipShown = null;
+                _tip.Hide(this);
+            }
+            Invalidate();
+        }
+
+        protected override void OnMouseWheel(MouseEventArgs e)
+        {
+            base.OnMouseWheel(e);
+            if (_mode == "usage" && _contentH > _visibleH) ScrollTo(_scroll - e.Delta * S(48) / 120);
+        }
+
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            base.OnMouseDown(e);
+            if (e.Button != MouseButtons.Left || _thumb.IsEmpty) return;
+            var track = new Rectangle(_thumb.X - S(4), _viewport.Y, _thumb.Width + S(8), _viewport.Height);
+            if (_thumb.Contains(e.Location) || (track.Contains(e.Location) && Inflate(_thumb).Contains(e.Location)))
+                _dragFrom = e.Y - _thumb.Y;
+            else if (track.Contains(e.Location))
+                ScrollTo(_scroll + (e.Y < _thumb.Y ? -_visibleH : _visibleH));   // page up / down
+        }
+
+        private Rectangle Inflate(Rectangle r) => Rectangle.Inflate(r, S(4), 0);
+
+        protected override void OnMouseUp(MouseEventArgs e)
+        {
+            base.OnMouseUp(e);
+            if (_dragFrom == null) return;
+            _dragFrom = null;
+            Invalidate();
         }
 
         protected override void OnMouseClick(MouseEventArgs e)

@@ -102,10 +102,14 @@ class Panel:
         self._notice_track: tk.Canvas | None = None
         self._page: dict[str, int] = {}     # which account page each card shows
         self._diag_top = "1.0"              # first visible line survives re-renders
+        self.tab = "subscription"           # subscription | payg
+        self._scroll: tk.Canvas | None = None
+        self._scroll_top = 0.0              # scroll position survives re-renders
         self._results: list[ProviderResult] = []
         self._meta: dict = {}
         self.f_title = tkfont.Font(family="Segoe UI", size=11, weight="bold")
         self.f_body = tkfont.Font(family="Segoe UI", size=9)
+        self.f_body_bold = tkfont.Font(family="Segoe UI", size=9, weight="bold")
         self.f_small = tkfont.Font(family="Segoe UI", size=8)
         self.f_pct = tkfont.Font(family="Consolas", size=10, weight="bold")
         self.f_mono = tkfont.Font(family="Consolas", size=8)
@@ -215,6 +219,12 @@ class Panel:
             except tk.TclError:
                 pass
             self._diag_box = None
+        if self._scroll is not None:
+            try:
+                self._scroll_top = self._scroll.yview()[0]
+            except tk.TclError:
+                pass
+            self._scroll = None
         for child in win.winfo_children():
             child.destroy()
 
@@ -222,6 +232,8 @@ class Panel:
         outer.pack(padx=1, pady=1, fill="both", expand=True)
 
         self._header(outer)
+        if self.mode == "usage":
+            self._tabs(outer)
         if self._notice and self.mode == "usage":
             self._notice_bar(outer)
         body = tk.Frame(outer, bg=theme.BG)
@@ -233,6 +245,7 @@ class Panel:
         self._footer(outer)
 
         win.update_idletasks()
+        self._fit_scroll(win)
         self._place(win)
         if self._diag_box is not None:
             # Only now is the final size known; restoring earlier drifts.
@@ -285,14 +298,94 @@ class Panel:
                 btn.pack(side="left", padx=(0, 6))
                 btn.bind("<Button-1>", lambda _e, f=fn: f())
 
+    def _tab_results(self, tab: str) -> list[ProviderResult]:
+        return [r for r in self._results if (r.billing or "subscription") == tab]
+
+    def _tabs(self, parent) -> None:
+        """Subscriptions | Pay as you go, above the cards."""
+        bar = tk.Frame(parent, bg=theme.BG)
+        bar.pack(fill="x", padx=PAD, pady=(8, 0))
+        for key, title in (("subscription", "Subscriptions"), ("payg", "Pay as you go")):
+            count = len(self._tab_results(key))
+            active = key == self.tab
+            cell = tk.Frame(bar, bg=theme.BG)
+            cell.pack(side="left", padx=(0, 14))
+            label = tk.Label(cell, text=f"{title}  {count}" if count else title, bg=theme.BG,
+                             fg=theme.FG if active else theme.FG_FAINT,
+                             font=self.f_body_bold if active else self.f_body,
+                             cursor="hand2", padx=2)
+            label.pack(anchor="w")
+            tk.Frame(cell, bg=theme.ACCENT if active else theme.BG, height=2).pack(fill="x", pady=(3, 0))
+            for widget in (cell, label):
+                widget.bind("<Button-1>", lambda _e, k=key: self.select_tab(k))
+        tk.Frame(parent, bg=theme.BORDER, height=1).pack(fill="x", padx=PAD)
+
+    def select_tab(self, tab: str) -> None:
+        if tab != self.tab:
+            self.tab = tab
+            self._scroll_top = 0.0
+        self._render()
+
     def _usage(self, parent) -> None:
+        """The cards of the selected tab, in a canvas that scrolls when they
+        do not fit on the screen."""
+        wrap = tk.Frame(parent, bg=theme.BG)
+        wrap.pack(fill="both", expand=True)
+        wrap.columnconfigure(0, weight=1)
+        wrap.rowconfigure(0, weight=1)
+        canvas = tk.Canvas(wrap, bg=theme.BG, highlightthickness=0, borderwidth=0)
+        inner = tk.Frame(canvas, bg=theme.BG)
+        canvas.create_window((0, 0), window=inner, anchor="nw", tags="inner")
+        canvas.grid(row=0, column=0, sticky="nsew")
+        bar = tk.Scrollbar(wrap, command=canvas.yview, width=10, bg=theme.BG_CARD,
+                           troughcolor=theme.BG, activebackground=theme.FG_FAINT,
+                           relief="flat", borderwidth=0)
+        canvas.configure(yscrollcommand=bar.set)
+        canvas.bind("<Configure>", lambda e: canvas.itemconfigure("inner", width=e.width))
+        self._scroll = canvas
+        self._scroll_bar = bar
+        self._scroll_inner = inner
+
+        results = self._tab_results(self.tab)
         if not self._results:
-            tk.Label(
-                parent, text="Loading...", bg=theme.BG, fg=theme.FG_DIM, font=self.f_body
-            ).pack(anchor="w", pady=20)
+            tk.Label(inner, text="Loading...", bg=theme.BG, fg=theme.FG_DIM,
+                     font=self.f_body).pack(anchor="w", pady=20)
+        elif not results:
+            text = ("No pay-as-you-go API keys found.\nQuotaTray reads the DeepSeek key that "
+                    "OpenCode or DeepSeek Harness (dsh) keeps, or DEEPSEEK_API_KEY."
+                    if self.tab == "payg" else "No subscriptions found on this machine.")
+            tk.Label(inner, text=text, bg=theme.BG, fg=theme.FG_DIM, font=self.f_body,
+                     justify="left", wraplength=WIDTH - 2 * PAD).pack(anchor="w", pady=20)
+        for result in results:
+            self._provider_card(inner, result)
+
+    def _fit_scroll(self, win) -> None:
+        """Size the card area: all of it when it fits, else what the screen
+        allows with a scrollbar (the mouse wheel scrolls it too)."""
+        canvas = self._scroll
+        if canvas is None:
             return
-        for result in self._results:
-            self._provider_card(parent, result)
+        inner = self._scroll_inner
+        win.update_idletasks()
+        content_h = inner.winfo_reqheight()
+        content_w = max(inner.winfo_reqwidth(), WIDTH - 2 * PAD - 2)
+        canvas.configure(width=content_w, height=1)
+        win.update_idletasks()
+        others = win.winfo_reqheight() - 1               # everything but the cards
+        room = win.winfo_screenheight() - 56 - 40 - others
+        height = max(80, min(content_h, room))
+        canvas.configure(height=height, scrollregion=(0, 0, content_w, content_h))
+        if content_h > height:
+            self._scroll_bar.grid(row=0, column=1, sticky="ns")
+            canvas.yview_moveto(self._scroll_top)
+        else:
+            self._scroll_top = 0.0
+
+        def wheel(event):
+            if self._scroll is canvas and content_h > height:
+                canvas.yview_scroll(int(-event.delta / 120) * 3, "units")
+
+        win.bind("<MouseWheel>", wheel)
 
     def _flip(self, provider_id: str, step: int, count: int) -> None:
         self._page[provider_id] = (self._page.get(provider_id, 0) + step) % count
@@ -332,7 +425,8 @@ class Panel:
                 btn.bind("<Button-1>", lambda _e, st=step, pid=product.provider_id,
                          n=len(pages): self._flip(pid, st, n))
 
-        if len(pages) > 1 and result.label:
+        # Which login this is; for an API key, always say which tool holds it.
+        if result.label and (len(pages) > 1 or result.billing == "payg"):
             tk.Label(
                 inner, text=result.label, bg=theme.BG_CARD, fg=theme.FG_DIM, font=self.f_small,
                 anchor="w",
