@@ -53,7 +53,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt pyinstaller
+          python -m pip install -r requirements.txt "pyinstaller>=6.9"
 
       - name: Generate the application icon
         run: python tools/make_icon.py

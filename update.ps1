@@ -43,6 +43,12 @@ function Start-QuotaTray {
         return
     }
     if ($WaitPid -le 0 -and -not $script:Stopped) { return }
+    # Started from QuotaTray, this script inherited its PyInstaller state; a
+    # new exe that sees it reuses the old copy's unpacked files, which the
+    # old copy then deletes. Start the new one clean.
+    Get-ChildItem Env: | Where-Object { $_.Name -like "_PYI_*" -or $_.Name -eq "_MEIPASS2" } |
+        ForEach-Object { Remove-Item -LiteralPath ("Env:" + $_.Name) -ErrorAction SilentlyContinue }
+    $env:PYINSTALLER_RESET_ENVIRONMENT = "1"
     $dir = $info.dir
     if ($info.kind -eq "source") {
         $pyw = Join-Path $dir ".venv\Scripts\pythonw.exe"

@@ -132,8 +132,12 @@ class Plan:
         self.note = note
 
     def launch(self) -> None:
+        from .win.proc import independent_env
+
         kwargs = {"creationflags": DETACHED} if sys.platform == "win32" else {}
-        subprocess.Popen(self.command, close_fds=True, **kwargs)
+        # A clean environment, or the new exe would reuse (and lose) our
+        # unpacked files; see independent_env.
+        subprocess.Popen(self.command, close_fds=True, env=independent_env(), **kwargs)
 
 
 def install(release_tag: str, repo: str, progress: Progress) -> Plan:
@@ -141,7 +145,8 @@ def install(release_tag: str, repo: str, progress: Progress) -> Plan:
     reason; on failure the running version is left exactly as it was."""
     kind = install_kind()
     pid = str(os.getpid())
-    after = ["--wait-pid", pid, "--updated-from", __version__]
+    # --fresh: started with a clean environment (see independent_env).
+    after = ["--wait-pid", pid, "--updated-from", __version__, "--fresh"]
 
     if kind == "source":
         return _install_source(release_tag, repo, progress, after)

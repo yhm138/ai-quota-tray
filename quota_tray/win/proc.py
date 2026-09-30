@@ -3,12 +3,33 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
 import sys
 
 log = logging.getLogger(__name__)
 
 CREATE_NO_WINDOW = 0x08000000
+
+
+def independent_env(base: dict | None = None) -> dict:
+    """Environment for starting a *separate* QuotaTray (after an update, or a
+    self-restart).
+
+    A PyInstaller one-file exe started from inside another one inherits its
+    _PYI_* variables, takes itself for that app's child and reuses the
+    parent's %TEMP%\\_MEIxxxx folder instead of unpacking its own. When the
+    parent exits it deletes that folder under the new process ("Failed to
+    remove temporary directory"), whose later imports then fail (Tcl,
+    cryptography). PYINSTALLER_RESET_ENVIRONMENT=1 (PyInstaller 6.9+) tells
+    the bootloader to start fresh; dropping the variables covers older ones.
+    """
+    env = {
+        k: v for k, v in (os.environ if base is None else base).items()
+        if not k.upper().startswith("_PYI_") and k.upper() not in ("_MEIPASS2", "_PYI_SPLASH_IPC")
+    }
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    return env
 
 
 def _kwargs() -> dict:

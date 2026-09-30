@@ -1,5 +1,20 @@
 # Changelog
 
+## v1.3.4
+
+- **Fixed: after an in-app update the new version could break**: a
+  *Failed to remove temporary directory ..._MEI...* warning, then Claude
+  showing *could not decrypt oauth:tokenCache (ModuleNotFoundError)*, and on
+  the next start *Tcl wasn't installed properly*. The one-file exe started
+  the new version with its own PyInstaller environment, so the new version
+  reused the old one's unpacked files, which the old one deleted as it
+  exited. New copies now start with a clean environment
+  (`PYINSTALLER_RESET_ENVIRONMENT=1`, inherited `_PYI_*` variables dropped),
+  after an update, after a self-restart and from `update.ps1`
+- A copy started by an older version (the update from v1.3.3) notices and
+  relaunches itself cleanly right away, so this update is already safe
+- The build requires PyInstaller 6.9 or newer, which supports the reset
+
 ## v1.3.3
 
 - **Readable Claude limit names.** Claude's usage reply includes entries

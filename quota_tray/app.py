@@ -367,10 +367,13 @@ class QuotaTrayApp:
         try:
             import subprocess
 
+            from .win.proc import independent_env
+
             subprocess.Popen(
-                [sys.executable, "--autostart", "--wait-pid", str(os.getpid())],
+                [sys.executable, "--autostart", "--wait-pid", str(os.getpid()), "--fresh"],
                 creationflags=0x00000008 | 0x00000200,          # DETACHED | NEW_GROUP
                 close_fds=True,
+                env=independent_env(),      # unpack afresh, not into our folder
             )
         except Exception:                                       # noqa: BLE001
             log.exception("could not restart")
@@ -726,7 +729,29 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
 
+def _relaunch_clean(argv: list[str]) -> bool:
+    """A copy started by an older QuotaTray (v1.3.3 and before, after an
+    update or self-restart) inherited that copy's PyInstaller state and runs
+    from its unpacked folder, which the old copy deletes as it exits. Start
+    a clean copy right away, while the old one is still up, and step aside.
+    Our own launches pass --fresh, so this happens once per old-version hop."""
+    if not getattr(sys, "frozen", False) or "--wait-pid" not in argv or "--fresh" in argv:
+        return False
+    import subprocess
+
+    from .win.proc import independent_env
+
+    try:
+        subprocess.Popen([sys.executable, *argv, "--fresh"], env=independent_env(),
+                         creationflags=0x00000008 | 0x00000200, close_fds=True)
+    except Exception:                                           # noqa: BLE001
+        return False
+    return True
+
+
 def _main(argv: list[str]) -> int:
+    if _relaunch_clean(argv):
+        return 0
     if "--update" in argv:
         return run_update()
     if "--once" in argv or "--diagnose" in argv:
