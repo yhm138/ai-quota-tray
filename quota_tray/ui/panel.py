@@ -67,8 +67,9 @@ class Panel:
             self._render()
 
     def set_notice(self, text: str | None, tone: str = "", action_text: str | None = None,
-                   action=None, progress: float | None = None) -> None:
-        self._notice = (text, tone, action_text, action, progress) if text else None
+                   action=None, progress: float | None = None, more: list | None = None) -> None:
+        """more: extra (label, callback) buttons shown after the main one."""
+        self._notice = (text, tone, action_text, action, progress, list(more or [])) if text else None
         if self.win is not None and self.win.winfo_exists():
             self._render()
 
@@ -78,7 +79,7 @@ class Panel:
         showing = self.win is not None and self.win.winfo_exists()
         if (showing and self._notice and self._notice[2] is None and label is not None
                 and label.winfo_exists() and bar is not None and bar.winfo_exists()):
-            self._notice = (text, self._notice[1], None, None, progress)
+            self._notice = (text, self._notice[1], None, None, progress, [])
             label.configure(text=text)
             self._draw_progress(bar, progress)
             return
@@ -197,7 +198,7 @@ class Panel:
         )
 
     def _notice_bar(self, parent) -> None:
-        text, tone, action_text, action, progress = self._notice
+        text, tone, action_text, action, progress, more = self._notice
         color = {"good": theme.OK, "warn": theme.WARN}.get(tone, theme.FG_DIM)
         outer = tk.Frame(parent, bg=theme.BG_ROW)
         outer.pack(fill="x", padx=PAD, pady=(6, 0))
@@ -205,7 +206,7 @@ class Panel:
         bar.pack(fill="x")
         self._notice_label = tk.Label(
             bar, text=text, bg=theme.BG_ROW, fg=color, font=self.f_body,
-            wraplength=WIDTH - (150 if action_text else 60), justify="left", anchor="w",
+            wraplength=WIDTH - 70, justify="left", anchor="w",
         )
         self._notice_label.pack(side="left", fill="x", expand=True, padx=10, pady=8)
         self._notice_track = None
@@ -219,11 +220,17 @@ class Panel:
                          cursor="hand2", padx=8)
         close.pack(side="right")
         close.bind("<Button-1>", lambda _e: self.set_notice(None))
-        if action_text and action:
-            btn = tk.Label(bar, text=action_text, bg=theme.ACCENT, fg="#FFFFFF",
-                           font=self.f_small, padx=10, pady=5, cursor="hand2")
-            btn.pack(side="right", pady=6)
-            btn.bind("<Button-1>", lambda _e: action())
+        buttons = ([(action_text, action)] if action_text and action else []) + more
+        if buttons:
+            # Their own row, so the message keeps the full width.
+            row = tk.Frame(outer, bg=theme.BG_ROW)
+            row.pack(fill="x", padx=10, pady=(0, 8))
+            for i, (label, fn) in enumerate(buttons):
+                btn = tk.Label(row, text=label, bg=theme.ACCENT if i == 0 else theme.BG_CARD,
+                               fg="#FFFFFF" if i == 0 else theme.FG_DIM,
+                               font=self.f_small, padx=10, pady=5, cursor="hand2")
+                btn.pack(side="left", padx=(0, 6))
+                btn.bind("<Button-1>", lambda _e, f=fn: f())
 
     def _usage(self, parent) -> None:
         if not self._results:

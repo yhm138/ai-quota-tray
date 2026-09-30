@@ -331,8 +331,10 @@ class QuotaTrayApp:
                 why = str(exc) or exc.__class__.__name__
                 self._updating = False
                 self._post(lambda: self.panel.set_notice(
-                    f"Update failed, still running v{__version__}: {why}",
-                    "warn", "Retry", self._on_apply_update))
+                    f"Update failed, still running v{__version__}: {why}\n"
+                    f"Details: {LOG_PATH()}",
+                    "warn", "Retry", self._on_apply_update,
+                    more=[("Open log", lambda: autostart.open_folder(LOG_PATH()))]))
                 return
             self._post(lambda: self.root.after(600, self.quit))
 

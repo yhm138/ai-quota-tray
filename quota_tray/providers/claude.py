@@ -68,15 +68,42 @@ WINDOW_LABELS = {
     "seven_day_fable": ("7-day Fable", 33),
     "seven_day_cowork": ("7-day Cowork", 34),
     "cowork": ("Cowork", 34),
+    "seven_day_overage_included": ("7-day overage allowance", 35),
     "extra_usage": ("Extra usage", 40),
     "monthly": ("Monthly", 45),
 }
+
+# Anthropic ships new limits under random two-word code names first. Known
+# ones are shown as what they are; the rest stay out of the usage bars (they
+# are experiments, usually 0% with no reset) and are listed in Diagnostics.
+CODENAME_CREDITS = {
+    "iguana_necktie": "Cloud credit",       # $100 Claude Code cloud-sessions credit
+}
+_PERIOD_PREFIXES = (("five_hour", "5-hour"), ("seven_day", "7-day"), ("thirty_day", "30-day"),
+                    ("monthly", "Monthly"), ("weekly", "Weekly"), ("daily", "Daily"))
+_KNOWN_WORDS = {"opus", "sonnet", "haiku", "fable", "cowork", "extra", "usage", "session",
+                "overage", "included", "oauth", "apps"}
+
+
+def is_codename(key: str) -> bool:
+    """'nimbus_quill', 'tangelo' yes; 'seven_day_opus', 'extra_usage' no."""
+    k = key.lower()
+    if k in WINDOW_LABELS or any(k.startswith(p) for p, _ in _PERIOD_PREFIXES):
+        return False
+    words = k.split("_")
+    return len(words) in (1, 2) and all(w.isalpha() for w in words) \
+        and not (set(words) & _KNOWN_WORDS)
 
 
 def _label_for(key: str) -> tuple[str, int]:
     k = key.lower()
     if k in WINDOW_LABELS:
         return WINDOW_LABELS[k]
+    for prefix, pretty in _PERIOD_PREFIXES:
+        # seven_day_foo_bar -> "7-day Foo Bar"
+        if k.startswith(prefix + "_"):
+            rest = k[len(prefix) + 1:].replace("_", " ").strip()
+            return f"{pretty} {rest.title()}", 36
     pretty = key.replace("_", " ").strip().title()
     return pretty, 50
 
@@ -254,8 +281,8 @@ def _build_windows(payload: dict, scale_mode: str, *, base_time=None) -> list[Qu
             key = "/".join(path[-2:]) if len(path) >= 2 else key
         seen.add(key)
         used = node_used(node)
-        if used is None:
-            continue
+        if used is None or is_codename(key):
+            continue                     # code-named experiments are not bars
         label, order = _label_for(key)
         detail = None
         limit = node.get("monthly_limit") or node.get("limit")
@@ -409,8 +436,12 @@ class ClaudeProvider(Provider):
             prof_plan, prof_account, rows = claude_profile_info(profile)
             result.plan = prof_plan or result.plan
             result.account = result.account or prof_account
-            result.info = rows + claude_spend_info(payload)
+            result.info = rows + claude_spend_info(payload) + claude_codename_info(payload)
             result.resets = claude_resets(payload)
+            hidden = hidden_codenames(payload)
+            if hidden:
+                result.attempts.append(SourceAttempt(
+                    "internal quotas (not shown)", True, "; ".join(hidden)))
         except Exception:                                       # noqa: BLE001
             log.debug("claude account details failed", exc_info=True)
         return True
@@ -634,6 +665,37 @@ def claude_spend_info(usage: dict) -> list[InfoRow]:
         return [InfoRow("Extra usage", f"{money(used, currency)} of {money(limit, currency)} used \u00b7 "
                                        f"{money(left, currency)} left", tone)]
     return [InfoRow("Extra usage", f"{money(used, currency)} used")]
+
+
+def claude_codename_info(usage: dict) -> list[InfoRow]:
+    """Known code-named entries that are credits rather than limits."""
+    rows = []
+    if not isinstance(usage, dict):
+        return rows
+    for key, label in CODENAME_CREDITS.items():
+        node = usage.get(key)
+        if not isinstance(node, dict):
+            continue
+        used = node_used(node)
+        if used is None:
+            continue
+        ends = node_reset(node)
+        value = f"{used:.1f}".rstrip("0").rstrip(".") + "% used"
+        if ends:
+            value += f" \u00b7 expires {fmt_date(ends)}"
+        rows.append(InfoRow(label, value, "warn" if used >= 90 else ""))
+    return rows
+
+
+def hidden_codenames(usage: dict) -> list[str]:
+    """Code-named entries kept out of the panel, for Diagnostics."""
+    out = []
+    if isinstance(usage, dict):
+        for key, node in usage.items():
+            if is_codename(key) and key not in CODENAME_CREDITS and isinstance(node, dict):
+                used = node_used(node)
+                out.append(f"{key} {used:g}%" if used is not None else f"{key} (empty)")
+    return out
 
 
 def claude_resets(usage: dict) -> list[ResetGrant]:

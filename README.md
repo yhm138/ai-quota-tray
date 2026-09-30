@@ -139,7 +139,9 @@ It finds your install through its run-at-login entry (or the running
 process), stops it, installs the latest release over it and starts it again.
 It works for `QuotaTray.exe`, the portable folder and source installs, and
 settings in `%APPDATA%\QuotaTray` are kept. Source installs can also just run
-`update.bat`. Every run is logged to `%APPDATA%\QuotaTray\update.log`.
+`update.bat`. This script logs to `%APPDATA%\QuotaTray\update.log`; updates
+started from the tray menu log to `%APPDATA%\QuotaTray\quota-tray.log`, and a
+failed one has an *Open log* button.
 
 ## Where the numbers come from
 
@@ -303,7 +305,8 @@ executable, the portable zip and the SHA256 sums to the release.
 
 - These are **undocumented internal endpoints**. Vendors can change them at any time. The parsers hunt recursively for `utilization` / `used_percent` fields rather than fixed paths, so a reshuffled envelope still parses — and if one truly breaks, `diagnose.bat` names it.
 - Antigravity needs the IDE running.
-- Claude publishes no renewal date, so only the subscription start is shown. New Claude limits appear under the names the server gives them (internal code names such as "Iguana Necktie") until QuotaTray learns a friendlier label.
+- Claude publishes no renewal date, so only the subscription start is shown.
+- Claude's usage reply also carries entries under internal code names. Known ones are shown as what they are (`iguana_necktie` is the Claude Code *Cloud credit*); unknown ones are kept out of the bars and listed in Diagnostics under *internal quotas (not shown)*.
 - The Codex session-log fallback is a snapshot, not live data.
 - The release binaries are unsigned. See the antivirus note above.
 
@@ -403,7 +406,7 @@ irm https://raw.githubusercontent.com/yhm138/ai-quota-tray/main/update.ps1 | iex
 
 脚本会通过开机自启项（或正在运行的进程）找到你的安装位置，停掉它、装上最新版并重新启动。
 exe、便携版、源码安装都适用，`%APPDATA%\QuotaTray` 里的设置会保留。源码安装也可以直接运行
-`update.bat`。每次更新的记录在 `%APPDATA%\QuotaTray\update.log`。
+`update.bat`。这个脚本的记录在 `%APPDATA%\QuotaTray\update.log`；从托盘菜单发起的更新记录在 `%APPDATA%\QuotaTray\quota-tray.log`，更新失败时面板上有 *Open log* 按钮可直接打开。
 
 ## 额度是从哪里读的
 
@@ -509,7 +512,8 @@ python tests\test_providers.py    # 85 项离线测试，不需要联网
 
 - 这些都是各家的**内部接口**，没有公开文档，厂商随时可能改。解析器写成「递归查找 `utilization` / `used_percent` 字段」而不是写死路径，所以外层结构变了还能读；真失效了 `diagnose.bat` 会告诉你是哪条断的
 - Antigravity 必须开着 IDE
-- Claude 不公开续费日期，所以只显示订阅开始日期。Claude 新增的限额会先显示服务器给的内部代号（如 "Iguana Necktie"）
+- Claude 不公开续费日期，所以只显示订阅开始日期
+- Claude 的用量接口里还有一些内部代号条目。已知的会显示成真实含义（`iguana_necktie` 是 Claude Code 的 *Cloud credit* 云会话额度）；未知的不显示为进度条，列在诊断的 *internal quotas (not shown)* 里
 - Codex 的会话日志兜底是快照，不是实时数据
 - Release 里的二进制未签名，见上面关于杀软误报的说明
 

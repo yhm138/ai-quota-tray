@@ -711,6 +711,39 @@ check("reminder waits for the hour", not reminders.due(None, morning, 10))
 check("reminder once a day", reminders.due(None, morning.replace(hour=11), 10)
       and not reminders.due("2026-09-24", morning.replace(hour=11), 10))
 
+# Code-named entries, shaped like the user's v1.2.0 panel.
+coded = {
+    "five_hour": {"utilization": 5.0, "resets_at": later_iso},
+    "seven_day": {"utilization": 45.0, "resets_at": later_iso},
+    "seven_day_opus": {"utilization": 3.0, "resets_at": later_iso},
+    "seven_day_overage_included": {"utilization": 12.0, "resets_at": later_iso},
+    "iguana_necktie": {"utilization": 7.5, "resets_at": later_iso},
+    "nimbus_quill": {"utilization": 0.0, "resets_at": None},
+    "tangelo": None,
+    "cedar_ember": {"eligible": True, "grants": [{"resets_left": 1, "ends_at": later_iso,
+        "clears": ["five_hour", "seven_day", "seven_day_overage_included"]}]},
+}
+claude.session = lambda: fake_session(get=lambda url, **k: FakeResp(
+    coded if url == claude.OAUTH_USAGE_URL else {}, 200 if url == claude.OAUTH_USAGE_URL else 404))
+claude._PROFILES.clear()
+set_login("tok-coded", "/fake/.credentials.json", None, [])
+pc = claude.ClaudeProvider(Config({"providers": {"claude": {"order": ["oauth"]}}}))
+pc.detect = lambda: True
+r = pc.fetch()
+labels = [w.label for w in r.sorted_windows()]
+check("code names are not usage bars", labels == ["5-hour window", "7-day window", "7-day Opus",
+                                                  "7-day overage allowance"], labels)
+cloud = next((i for i in r.info if i.label == "Cloud credit"), None)
+check("iguana_necktie is the cloud credit", cloud is not None
+      and cloud.value.startswith("7.5% used") and "expires" in cloud.value, r.info)
+check("hidden experiments listed in diagnostics", any(
+    a.name == "internal quotas (not shown)" and "nimbus_quill 0%" in a.detail for a in r.attempts),
+      [a.detail for a in r.attempts])
+check("reset note uses readable names",
+      "5-hour window + 7-day window + 7-day overage allowance" in r.resets[0].note, r.resets[0].note)
+check("unknown period keys read well", claude._label_for("seven_day_oauth_apps")[0] == "7-day Oauth Apps"
+      and not claude.is_codename("extra_usage") and claude.is_codename("tangelo"))
+
 # ------------------------------------------------------------------ several accounts
 
 print("\n--- several accounts ---")

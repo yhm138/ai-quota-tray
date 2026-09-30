@@ -165,18 +165,3 @@ def launch(release: Release, repo: str = DEFAULT_REPO):
     log.info("launching updater for %s: %s", release.tag, script)
     proc = subprocess.Popen(args, creationflags=flags, close_fds=True, cwd=str(program_dir()))
     return proc, ready
-
-
-def last_log_line() -> str:
-    """The updater's most recent message, for showing why it stopped."""
-    from .config import app_dir
-
-    try:
-        lines = (app_dir() / "update.log").read_text(encoding="utf-8-sig", errors="replace")
-    except OSError:
-        return "see update.log"
-    for line in reversed(lines.splitlines()):
-        if line.strip():
-            text = line.split("  ", 1)[-1].strip()
-            return text[len("update failed: "):] if text.startswith("update failed: ") else text
-    return "see update.log"
