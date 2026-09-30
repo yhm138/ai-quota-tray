@@ -53,6 +53,10 @@ namespace QuotaTray.UI
         private Notice _notice;
         private readonly Dictionary<string, int> _page = new Dictionary<string, int>();
         private readonly List<Hit> _hits = new List<Hit>();
+        // Text shortened with "..." and its full version, shown on hover.
+        private readonly List<KeyValuePair<Rectangle, string>> _tips = new List<KeyValuePair<Rectangle, string>>();
+        private readonly ToolTip _tip = new ToolTip { ShowAlways = true, UseAnimation = false, UseFading = false };
+        private string _tipShown;
         private Hit _hover;
         private readonly TextBox _diag;
         private string _mode = "usage";
@@ -97,6 +101,12 @@ namespace QuotaTray.UI
                 if (e.KeyCode == Keys.Escape) Hide();
             };
             Deactivate += (s, e) => Hide();
+            VisibleChanged += (s, e) =>
+            {
+                if (Visible || _tipShown == null) return;
+                _tipShown = null;
+                _tip.Hide(this);
+            };
         }
 
         protected override CreateParams CreateParams
@@ -280,6 +290,18 @@ namespace QuotaTray.UI
             return text.Length <= limit ? text : text.Substring(0, limit - 3).TrimEnd() + "...";
         }
 
+        /// <summary>Draws text shortened to limit characters; the full text shows on hover.</summary>
+        private Size DrawShort(Graphics g, bool draw, string full, int limit, Font font, Color color, int x, int y,
+            string tip = null)
+        {
+            var text = Ellipsis(full, limit);
+            var size = Measure(g, text, font);
+            Draw(g, draw, text, font, color, x, y);
+            if (draw && (text != full || tip != null)) _tips.Add(new KeyValuePair<Rectangle, string>(
+                new Rectangle(x, y, size.Width, size.Height), tip ?? full));
+            return size;
+        }
+
         private void AddHit(bool draw, Rectangle r, Action a, bool primary = false)
         {
             if (draw) _hits.Add(new Hit { Rect = r, Action = a, Primary = primary });
@@ -288,7 +310,11 @@ namespace QuotaTray.UI
         /// <summary>Lays out (and with draw, paints) the whole panel; returns its height.</summary>
         private int LayoutPanel(Graphics g, int width, bool draw)
         {
-            if (draw) _hits.Clear();
+            if (draw)
+            {
+                _hits.Clear();
+                _tips.Clear();
+            }
             var pad = S(Pad);
             var y = pad;
 
@@ -467,9 +493,19 @@ namespace QuotaTray.UI
             var metaBits = new[] { result.Plan, result.Account }.Where(s => !string.IsNullOrEmpty(s)).ToList();
             if (metaBits.Count > 0)
             {
-                var text = Ellipsis(string.Join(" - ", metaBits), pages.Count > 1 ? 24 : 34);
-                var size = Measure(g, text, _fSmall);
-                Draw(g, draw, text, _fSmall, Theme.FgFaint, Math.Max(x + S(6), right - size.Width), y + S(4));
+                var full = string.Join(" - ", metaBits);
+                var limit = pages.Count > 1 ? 24 : 34;
+                var size = Measure(g, Ellipsis(full, limit), _fSmall);
+                var mx = Math.Max(x + S(6), right - size.Width);
+                // Squeezed by the page buttons: shorten further rather than run off the card.
+                while (mx + size.Width > right && limit > 8)
+                {
+                    limit--;
+                    size = Measure(g, Ellipsis(full, limit), _fSmall);
+                    mx = Math.Max(x + S(6), right - size.Width);
+                }
+                DrawShort(g, draw, full, limit, _fSmall, Theme.FgFaint, mx, y + S(4),
+                    Ellipsis(full, limit) != full ? string.Join("\n", metaBits) : null);
             }
             y += titleH;
 
@@ -504,7 +540,7 @@ namespace QuotaTray.UI
             {
                 var w = windows[i];
                 var cy = y + (rowH - _fBody.Height) / 2;
-                Draw(g, draw, Ellipsis(w.Label, 24), _fBody, Theme.FgDim, left, cy);
+                DrawShort(g, draw, w.Label, 24, _fBody, Theme.FgDim, left, cy);
                 if (draw)
                 {
                     var bar = new RectangleF(barX, y + (rowH - S(8)) / 2f, barRight - barX, S(8));
@@ -550,7 +586,7 @@ namespace QuotaTray.UI
             if (foot.Count > 0)
             {
                 y += S(8);
-                Draw(g, draw, Ellipsis(string.Join(" - ", foot), 58), _fSmall, Theme.FgFaint, left, y);
+                DrawShort(g, draw, string.Join(" - ", foot), 58, _fSmall, Theme.FgFaint, left, y);
                 y += _fSmall.Height;
             }
             return y;
@@ -577,6 +613,11 @@ namespace QuotaTray.UI
                 _hover = h;
                 Invalidate();
             }
+            var tip = _tips.LastOrDefault(t => t.Key.Contains(e.Location)).Value;
+            if (tip == _tipShown) return;
+            _tipShown = tip;
+            if (tip == null) _tip.Hide(this);
+            else _tip.Show(tip, this, e.X, e.Y + S(20));
         }
 
         protected override void OnMouseLeave(EventArgs e)
@@ -586,6 +627,11 @@ namespace QuotaTray.UI
             {
                 _hover = null;
                 Invalidate();
+            }
+            if (_tipShown != null)
+            {
+                _tipShown = null;
+                _tip.Hide(this);
             }
         }
 

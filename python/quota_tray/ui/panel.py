@@ -25,6 +25,59 @@ def _ellipsis(text: str, limit: int = MAX_LABEL) -> str:
     return text[: limit - 3].rstrip() + "..."
 
 
+class _Tooltip:
+    """The full text of a shortened label, shown while the mouse is on it."""
+
+    def __init__(self, widget: tk.Widget, text: str, font) -> None:
+        self.widget, self.text, self.font = widget, text, font
+        self.tip: tk.Toplevel | None = None
+        self.job = None
+        widget.bind("<Enter>", self._schedule, add="+")
+        widget.bind("<Leave>", self._hide, add="+")
+        widget.bind("<Destroy>", self._hide, add="+")
+
+    def _schedule(self, _event=None) -> None:
+        self._cancel()
+        self.job = self.widget.after(350, self._show)
+
+    def _cancel(self) -> None:
+        if self.job is not None:
+            try:
+                self.widget.after_cancel(self.job)
+            except tk.TclError:
+                pass
+            self.job = None
+
+    def _show(self) -> None:
+        self.job = None
+        if self.tip is not None or not self.widget.winfo_exists():
+            return
+        tip = tk.Toplevel(self.widget)
+        tip.overrideredirect(True)
+        tip.attributes("-topmost", True)
+        tk.Label(tip, text=self.text, bg=theme.BG_ROW, fg=theme.FG, font=self.font,
+                 justify="left", padx=8, pady=4, highlightthickness=1,
+                 highlightbackground=theme.BORDER).pack()
+        tip.update_idletasks()
+        x = self.widget.winfo_pointerx() + 12
+        y = self.widget.winfo_pointery() + 18
+        # Keep it on screen: the panel sits in the bottom-right corner.
+        x = min(x, tip.winfo_screenwidth() - tip.winfo_reqwidth() - 8)
+        if y + tip.winfo_reqheight() > tip.winfo_screenheight() - 8:
+            y = self.widget.winfo_pointery() - tip.winfo_reqheight() - 8
+        tip.geometry(f"+{max(0, x)}+{max(0, y)}")
+        self.tip = tip
+
+    def _hide(self, _event=None) -> None:
+        self._cancel()
+        if self.tip is not None:
+            try:
+                self.tip.destroy()
+            except tk.TclError:
+                pass
+            self.tip = None
+
+
 def _rounded(canvas: tk.Canvas, x0, y0, x1, y1, r, **kw):
     r = min(r, (y1 - y0) / 2, (x1 - x0) / 2)
     canvas.create_rectangle(x0 + r, y0, x1 - r, y1, outline="", **kw)
@@ -287,13 +340,12 @@ class Panel:
 
         meta_bits = [b for b in (result.plan, result.account) if b]
         if meta_bits:
-            tk.Label(
-                head,
-                text=_ellipsis(" - ".join(meta_bits), 24 if len(pages) > 1 else 34),
-                bg=theme.BG_CARD,
-                fg=theme.FG_FAINT,
-                font=self.f_small,
-            ).pack(side="right", pady=(4, 0))
+            full = " - ".join(meta_bits)
+            short = _ellipsis(full, 24 if len(pages) > 1 else 34)
+            meta = tk.Label(head, text=short, bg=theme.BG_CARD, fg=theme.FG_FAINT, font=self.f_small)
+            meta.pack(side="right", pady=(4, 0))
+            if short != full:
+                _Tooltip(meta, "\n".join(meta_bits), self.f_small)
 
         if not result.ok:
             tk.Label(
@@ -314,14 +366,17 @@ class Panel:
         danger = float(self._meta.get("danger", 90))
 
         for i, window in enumerate(result.sorted_windows()):
-            tk.Label(
+            name = tk.Label(
                 rows,
                 text=_ellipsis(window.label),
                 bg=theme.BG_CARD,
                 fg=theme.FG_DIM,
                 font=self.f_body,
                 anchor="w",
-            ).grid(row=i, column=0, sticky="w", padx=(0, 8), pady=3)
+            )
+            name.grid(row=i, column=0, sticky="w", padx=(0, 8), pady=3)
+            if _ellipsis(window.label) != window.label:
+                _Tooltip(name, window.label, self.f_small)
 
             bar = tk.Canvas(rows, height=10, bg=theme.BG_CARD, highlightthickness=0, width=110)
             bar.grid(row=i, column=1, sticky="ew", padx=(4, 8), pady=3)
@@ -358,13 +413,12 @@ class Panel:
         if result.data_time and (now_utc() - result.data_time).total_seconds() > 900:
             foot_bits.append(f"data {humanize_age(result.data_time)}")
         if foot_bits:
-            tk.Label(
-                inner,
-                text=_ellipsis(" - ".join(foot_bits), 58),
-                bg=theme.BG_CARD,
-                fg=theme.FG_FAINT,
-                font=self.f_small,
-            ).pack(anchor="w", pady=(8, 0))
+            full = " - ".join(foot_bits)
+            foot = tk.Label(inner, text=_ellipsis(full, 58), bg=theme.BG_CARD, fg=theme.FG_FAINT,
+                            font=self.f_small)
+            foot.pack(anchor="w", pady=(8, 0))
+            if _ellipsis(full, 58) != full:
+                _Tooltip(foot, full, self.f_small)
 
     def _account_details(self, parent, result: ProviderResult) -> None:
         """Plan, subscription, credits and banked resets under the bars."""
