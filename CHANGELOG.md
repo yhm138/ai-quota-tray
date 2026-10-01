@@ -1,5 +1,27 @@
 # Changelog
 
+## v1.8.3
+
+- **Hand edits to `config.json` now take effect without a restart.** The
+  config was read once at startup, so editing it (say, pasting a
+  `doubao.session_id`) and pressing Refresh did nothing -- and worse, the
+  app's own saves (like the daily reset-reminder stamp) could write the old
+  settings back over the edit. Now the file is re-read whenever it changes on
+  disk, before every refresh and before every save
+- **A `config.json` with a typo is never overwritten.** It used to be replaced
+  with defaults when it failed to parse, wiping the user's settings. Now it
+  is left alone, QuotaTray runs on defaults until it is fixed, and the panel
+  footer and Diagnostics say the file has an error. A UTF-8 BOM (which
+  Notepad can add) no longer counts as an error
+- **Doubao card shows the plan's validity date**, the way the app does
+  ("free trial until ..."). The activity-benefit end
+  (`campaign_benefit_info.benefit_end_time`) is shown as *Bonus until*, and
+  falls back to the subscription's own period end as *Plan until* when there
+  is no bonus — kept as separate fields so the two are never conflated.
+  (Cross-checked against the ChanningYuan/usageBar macOS project; our window
+  parsing, the `710012001` login-expired handling and the `aid`-only request
+  shape already matched.)
+
 ## v1.8.2
 
 - **Doubao windows read correctly off a full capture of the quota page.**

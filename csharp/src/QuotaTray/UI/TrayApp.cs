@@ -18,8 +18,9 @@ namespace QuotaTray.UI
     /// <summary>Tray icon, background refresh, update checks and the panel.</summary>
     public sealed class TrayApp : ApplicationContext
     {
-        private readonly Config _config;
-        private readonly List<Provider> _providers;
+        // Not readonly: reloaded when config.json is edited by hand (see ReloadConfigIfChanged).
+        private volatile Config _config;
+        private volatile List<Provider> _providers;
         private List<ProviderResult> _results;
         private DateTimeOffset? _lastRefresh;
         private Release _update;
@@ -234,8 +235,28 @@ namespace QuotaTray.UI
             return tasks.Select(t => t.Result).ToList();
         }
 
+        /// <summary>
+        /// Pick up hand edits to config.json without a restart. Also called before
+        /// every save, so a save never writes stale settings over an edit.
+        /// </summary>
+        private readonly object _configGate = new object();
+        private bool ReloadConfigIfChanged()
+        {
+            lock (_configGate)
+            {
+                if (!_config.ChangedOnDisk()) return false;
+                Log.Info("config.json changed on disk; reloading it");
+                var cfg = Config.Load();
+                _providers = Provider.Build(cfg);
+                _config = cfg;
+                return true;
+            }
+        }
+
         private void RefreshOnce()
         {
+            try { ReloadConfigIfChanged(); }
+            catch (Exception e) { Log.Error("reloading config.json failed: " + e); }
             var results = FetchAll(_providers);
             var hide = _config.Flag("hide_not_installed", true);
             var visible = results.Where(r => r.Installed || r.Ok || !hide).ToList();
@@ -260,7 +281,8 @@ namespace QuotaTray.UI
                 Warn = _config.Number("warn_percent", 75),
                 Danger = _config.Number("danger_percent", 90),
                 Subtitle = _lastRefresh != null ? "updated " + Time.HumanizeAge(_lastRefresh) : "",
-                Footer = $"v{AppInfo.Version} C# - every {_config.RefreshSeconds / 60} min" + (_update != null ? $" - {_update.Tag} available" : ""),
+                Footer = $"v{AppInfo.Version} C# - every {_config.RefreshSeconds / 60} min" + (_update != null ? $" - {_update.Tag} available" : "")
+                    + (_config.Error != null ? " - config.json has an error (see Diagnostics)" : ""),
             });
         }
 
@@ -274,6 +296,7 @@ namespace QuotaTray.UI
             if (text == null) return;
             Log.Info("reminding about unused resets: " + text.Replace("\n", " | "));
             Notify(text);
+            ReloadConfigIfChanged();
             _config.Data["last_reset_reminder"] = now.ToString("yyyy-MM-dd");
             _config.Save();
         }
@@ -286,6 +309,7 @@ namespace QuotaTray.UI
 
         private void ToggleReminders()
         {
+            ReloadConfigIfChanged();
             _config.Data["remind_unused_resets"] = !_config.Flag("remind_unused_resets", true);
             _config.Save();
         }
@@ -402,6 +426,8 @@ namespace QuotaTray.UI
         public string DiagnosticsText()
         {
             var lines = new List<string> { $"{AppInfo.Name} v{AppInfo.Version} ({AppInfo.Edition} edition)", "", "SUMMARY" };
+            if (_config.Error != null)
+                lines.Add($"  CONFIG: {_config.Error}; fix the file and it is picked up on the next refresh");
             if (_results.Count == 0) lines.Add("  (still collecting, try again in a moment)");
             foreach (var r in _results)
             {

@@ -124,29 +124,53 @@ def _deep_merge(base: dict, override: dict) -> dict:
     return out
 
 
+def _mtime(path) -> float | None:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return None
+
+
 class Config:
     def __init__(self, data: dict | None = None):
         self.data = _deep_merge(DEFAULTS, data or {})
+        self.mtime: float | None = None      # config.json's mtime when it was read/written
+        self.error: str | None = None        # why config.json could not be read, if it couldn't
 
     @classmethod
     def load(cls) -> "Config":
         path = CONFIG_PATH()
         if path.exists():
             try:
-                return cls(json.loads(path.read_text(encoding="utf-8")))
-            except Exception:                                   # noqa: BLE001
+                # utf-8-sig: Notepad may save UTF-8 with a BOM, which json rejects.
+                cfg = cls(json.loads(path.read_text(encoding="utf-8-sig")))
+            except Exception as exc:                            # noqa: BLE001
                 logging.getLogger(__name__).warning(
-                    "config.json could not be parsed, falling back to defaults", exc_info=True
+                    "config.json could not be parsed, using defaults until it is fixed", exc_info=True
                 )
+                # Never overwrite the user's file here: it may be a hand edit
+                # with a typo, and saving defaults over it would wipe it.
+                cfg = cls()
+                cfg.error = f"config.json could not be read ({exc})"
+            cfg.mtime = _mtime(path)
+            return cfg
         cfg = cls()
         cfg.save()
         return cfg
 
+    def changed_on_disk(self) -> bool:
+        """True when config.json was edited (or replaced) since this was read."""
+        return _mtime(CONFIG_PATH()) != self.mtime
+
     def save(self) -> None:
+        if self.error:
+            # The file on disk is the user's (broken) edit; don't clobber it.
+            return
         try:
             CONFIG_PATH().write_text(
                 json.dumps(self.data, indent=2, ensure_ascii=False), encoding="utf-8"
             )
+            self.mtime = _mtime(CONFIG_PATH())
         except Exception:                                       # noqa: BLE001
             logging.getLogger(__name__).warning("failed to write config.json", exc_info=True)
 

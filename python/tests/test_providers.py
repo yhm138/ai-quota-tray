@@ -1255,7 +1255,8 @@ check("doubao: a remaining count is shown if present", any(r.label == "Remaining
 # a last-7-days window at <1%.
 _ov = {"code": 0, "data": {
     "current_subscription": {"display": {"product_name": "\u4e2a\u4eba\u8ba2\u9605", "short_name": "\u6807\u51c6\u5957\u9910"},
-                             "sku_key": "doubao_personal_std"},
+                             "sku_key": "doubao_personal_std", "is_gift": False, "end_time": 1794303044488},
+    "campaign_benefit_info": {"benefit_end_time": 1792393764820, "campaign_tag": 3},
     "window_limit_section": {"usage_exhausted": False, "window_limit_groups": [
         {"feature_group": "general", "window_limits": [
             {"start_time": 0, "end_time": 0, "used_percent": 0,
@@ -1263,8 +1264,15 @@ _ov = {"code": 0, "data": {
             {"start_time": 1790457137809, "end_time": 1791061937809, "used_percent": 0,
              "less_than_one_percent": True, "window_type": 2, "item_type": 0},
         ]}]}}}
-ov_plan, ov_windows, _ = doubao.parse_overview(_ov)
+ov_plan, ov_windows, ov_rows = doubao.parse_overview(_ov)
 check("doubao: overview plan name", ov_plan == "\u6807\u51c6\u5957\u9910", ov_plan)
+# campaign benefit end wins over the subscription end_time (app shows "free trial until").
+check("doubao: benefit end becomes a Bonus-until row",
+      any(r.label == "Bonus until" and r.value == "2026-10-19" for r in ov_rows), [(r.label, r.value) for r in ov_rows])
+# No benefit -> fall back to the subscription's own end_time, labelled Plan until.
+_pu = doubao.parse_overview({"code": 0, "data": {"current_subscription": {"end_time": 1794303044488}}})[2]
+check("doubao: plain subscription end becomes a Plan-until row",
+      any(r.label == "Plan until" and r.value == "2026-11-10" for r in _pu), [(r.label, r.value) for r in _pu])
 check("doubao: windows labelled by type (current period, last 7 days)",
       [w.label for w in ov_windows] == ["Current period", "Last 7 days"], [w.label for w in ov_windows])
 check("doubao: not-started window has no 1970 reset", ov_windows[0].resets_at is None and ov_windows[0].detail == "not started",
@@ -1446,6 +1454,45 @@ _tmp = _sf.with_suffix(".tmp")
 _tmp.write_text(json.dumps({"x": 2}), encoding="utf-8")
 _os.replace(_tmp, _sf)
 check("shareio: owner can replace after a read", json.loads(shareio.read_text(_sf)) == {"x": 2})
+
+# ------------------------------------------------------------------ config hand edits
+
+print("\n--- config.json hand edits ---")
+from quota_tray import config as _cfgmod                          # noqa: E402
+
+_cdir = Path(tempfile.mkdtemp())
+_cpath = _cdir / "config.json"
+_real_cfg_path = _cfgmod.CONFIG_PATH
+_cfgmod.CONFIG_PATH = lambda: _cpath
+try:
+    # Notepad can save UTF-8 with a BOM; it must still load.
+    _cpath.write_bytes(b"\xef\xbb\xbf" + json.dumps(
+        {"providers": {"doubao": {"session_id": "bom-sid"}}}).encode("utf-8"))
+    _c = _cfgmod.Config.load()
+    check("config: a BOM-prefixed config.json loads", _c.error is None
+          and _c.provider("doubao").get("session_id") == "bom-sid", (_c.error, _c.provider("doubao")))
+
+    # A hand edit is noticed without a restart.
+    import time as _time                                           # noqa: E402
+    check("config: unchanged file is not reloaded", not _c.changed_on_disk())
+    _time.sleep(0.05)
+    _cpath.write_text(json.dumps({"providers": {"doubao": {"session_id": "new-sid"}}}), encoding="utf-8")
+    _os_t = _cpath.stat().st_mtime + 2
+    os.utime(_cpath, (_os_t, _os_t))
+    check("config: an edit on disk is noticed", _c.changed_on_disk())
+    check("config: reload picks up the new session_id",
+          _cfgmod.Config.load().provider("doubao").get("session_id") == "new-sid")
+
+    # A typo in the file must NOT be overwritten with defaults.
+    _broken = '{"providers": {"doubao": {"session_id": "keep-me",}}}'   # trailing comma
+    _cpath.write_text(_broken, encoding="utf-8")
+    _cb = _cfgmod.Config.load()
+    check("config: a broken file reports an error", _cb.error is not None, _cb.error)
+    _cb.data["last_reset_reminder"] = "2026-10-01"
+    _cb.save()
+    check("config: a broken file is never overwritten", _cpath.read_text(encoding="utf-8") == _broken)
+finally:
+    _cfgmod.CONFIG_PATH = _real_cfg_path
 
 print(f"\npassed {len(PASS)} / {len(PASS) + len(FAIL)}")
 if FAIL:

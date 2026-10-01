@@ -287,8 +287,10 @@ account, and reads the subscription *overview*
 (`/alice/commerce/sale/subscription/overview`) for the plan and the
 **window-limit usage** — a *Current period* window and a *Last 7 days* one. A
 period that has not started yet shows "not started" (no 1970 date), and a
-window under one percent shows "<1% used". The overview call is best effort: if
-Doubao's web signing rejects it, the card still shows the account and plan.
+window under one percent shows "<1% used". The plan's validity date is shown
+too (*Bonus until* for an activity benefit, else *Plan until*). The overview
+call is best effort: if Doubao's web signing rejects it, the card still shows
+the account and plan.
 
 - **Portable install?** Set `doubao.data_dir` in config.json to the folder that
   holds the app's cookie store (the portable install folder, or its `User Data`
@@ -637,7 +639,7 @@ TRAE 把它的 Cloud-IDE JWT 存在 `%APPDATA%\Trae CN\User\globalStorage\storag
 
 ### 豆包
 
-豆包桌面客户端是 www.doubao.com 的 Electron 应用。QuotaTray 从它的 cookie 库里读 `sessionid` cookie（和 Claude Desktop 一样的 OSCrypt/DPAPI + AES-GCM 方案），调 `/alice/profile/self` 拿登录账号，再调订阅 overview 接口（`/alice/commerce/sale/subscription/overview`）拿套餐和**窗口额度用量**——一个"当前时段"窗口和一个"近 7 天"窗口。尚未开始的时段显示"not started"（不会显示 1970 年），用量不足 1% 的窗口显示"<1% used"。overview 是尽力而为：如果豆包的网页签名拒绝了请求，卡片仍会显示账号和套餐。
+豆包桌面客户端是 www.doubao.com 的 Electron 应用。QuotaTray 从它的 cookie 库里读 `sessionid` cookie（和 Claude Desktop 一样的 OSCrypt/DPAPI + AES-GCM 方案），调 `/alice/profile/self` 拿登录账号，再调订阅 overview 接口（`/alice/commerce/sale/subscription/overview`）拿套餐和**窗口额度用量**——一个"当前时段"窗口和一个"近 7 天"窗口。尚未开始的时段显示"not started"（不会显示 1970 年），用量不足 1% 的窗口显示"<1% used"。还会显示套餐有效期（活动赠送显示 *Bonus until*，否则显示订阅本期结束 *Plan until*）。overview 是尽力而为：如果豆包的网页签名拒绝了请求，卡片仍会显示账号和套餐。
 
 - **便携版（Portable）？** 在 config.json 里把 `doubao.data_dir` 设成存放 cookie 库的文件夹（便携版安装目录，或其下的 `User Data` 子目录）。
 - **想用浏览器而不是客户端？** 把 `doubao.scan_browsers` 设成 `true`，QuotaTray 也会从 Edge、Chrome、Brave、Chromium、Vivaldi、Opera（所有 profile）里读 `doubao.com` 的 cookie。默认关闭。

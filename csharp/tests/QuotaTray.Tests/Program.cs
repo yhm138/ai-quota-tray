@@ -416,7 +416,7 @@ namespace QuotaTray.Tests
             Check("doubao: a remaining count is shown if present", drem.Item3.Any(r => r.Label == "Remaining" && r.Value == "88"));
             // The subscription overview carries the plan and window-limit usage.
             // Mirrors the real capture: current period not started (0/0), last-7-days at <1%.
-            const string ovJson = "{\"code\":0,\"data\":{\"current_subscription\":{\"display\":{\"product_name\":\"\\u4e2a\\u4eba\\u8ba2\\u9605\",\"short_name\":\"\\u6807\\u51c6\\u5957\\u9910\"},\"sku_key\":\"doubao_personal_std\"},\"window_limit_section\":{\"usage_exhausted\":false,\"window_limit_groups\":[{\"feature_group\":\"general\",\"window_limits\":[{\"start_time\":0,\"end_time\":0,\"used_percent\":0,\"less_than_one_percent\":false,\"window_type\":1,\"item_type\":0},{\"start_time\":1790457137809,\"end_time\":1791061937809,\"used_percent\":0,\"less_than_one_percent\":true,\"window_type\":2,\"item_type\":0}]}]}}}";
+            const string ovJson = "{\"code\":0,\"data\":{\"current_subscription\":{\"display\":{\"product_name\":\"\\u4e2a\\u4eba\\u8ba2\\u9605\",\"short_name\":\"\\u6807\\u51c6\\u5957\\u9910\"},\"sku_key\":\"doubao_personal_std\",\"is_gift\":false,\"end_time\":1794303044488},\"campaign_benefit_info\":{\"benefit_end_time\":1792393764820,\"campaign_tag\":3},\"window_limit_section\":{\"usage_exhausted\":false,\"window_limit_groups\":[{\"feature_group\":\"general\",\"window_limits\":[{\"start_time\":0,\"end_time\":0,\"used_percent\":0,\"less_than_one_percent\":false,\"window_type\":1,\"item_type\":0},{\"start_time\":1790457137809,\"end_time\":1791061937809,\"used_percent\":0,\"less_than_one_percent\":true,\"window_type\":2,\"item_type\":0}]}]}}}";
             var dov = DoubaoProvider.ParseOverview(J(ovJson));
             Check("doubao: overview plan name", dov.Item1 == "\u6807\u51c6\u5957\u9910", dov.Item1);
             Check("doubao: windows labelled by type",
@@ -425,6 +425,11 @@ namespace QuotaTray.Tests
                 dov.Item2[0].ResetsAt == null && dov.Item2[0].Detail == "not started", (dov.Item2[0].ResetsAt?.ToString() ?? "null") + "/" + dov.Item2[0].Detail);
             Check("doubao: last-7-days <1% kept distinct from a true 0",
                 dov.Item2[1].Percent == 0 && dov.Item2[1].Detail == "<1% used" && dov.Item2[1].ResetsAt != null, dov.Item2[1].Detail);
+            Check("doubao: benefit end becomes a Bonus-until row",
+                dov.Item3.Any(r => r.Label == "Bonus until" && r.Value == "2026-10-19"), string.Join(",", dov.Item3.Select(r => r.Label + "=" + r.Value)));
+            var dpu = DoubaoProvider.ParseOverview(J("{\"code\":0,\"data\":{\"current_subscription\":{\"end_time\":1794303044488}}}")).Item3;
+            Check("doubao: plain subscription end becomes a Plan-until row",
+                dpu.Any(r => r.Label == "Plan until" && r.Value == "2026-11-10"), string.Join(",", dpu.Select(r => r.Label + "=" + r.Value)));
             var seenDoubao = new List<string>();
             Http.Send = req =>
             {
@@ -590,6 +595,39 @@ namespace QuotaTray.Tests
                 try { File.Replace(tmp, sf, null); replaced = true; }
                 catch (Exception) { try { File.Delete(tmp); } catch (Exception) { } }
                 Check("io: owner can replace the file while QuotaTray reads it", replaced);
+            }
+
+            Console.WriteLine("--- config.json hand edits ---");
+            {
+                var cf = Paths.ConfigFile;
+                var hadConfig = File.Exists(cf) ? File.ReadAllBytes(cf) : null;
+                try
+                {
+                    // Notepad can save UTF-8 with a BOM; it must still load.
+                    var bom = new byte[] { 0xEF, 0xBB, 0xBF };
+                    File.WriteAllBytes(cf, bom.Concat(Encoding.UTF8.GetBytes("{\"providers\":{\"doubao\":{\"session_id\":\"bom-sid\"}}}")).ToArray());
+                    var c = Config.Load();
+                    Check("config: a BOM-prefixed config.json loads", c.Error == null && c.Provider("doubao").Str("session_id") == "bom-sid", c.Error);
+                    Check("config: unchanged file is not reloaded", !c.ChangedOnDisk());
+                    // A hand edit is noticed without a restart.
+                    File.WriteAllText(cf, "{\"providers\":{\"doubao\":{\"session_id\":\"new-sid\"}}}");
+                    File.SetLastWriteTimeUtc(cf, DateTime.UtcNow.AddSeconds(5));
+                    Check("config: an edit on disk is noticed", c.ChangedOnDisk());
+                    Check("config: reload picks up the new session_id", Config.Load().Provider("doubao").Str("session_id") == "new-sid");
+                    // A typo in the file must NOT be overwritten with defaults.
+                    const string broken = "{\"providers\": {\"doubao\": {\"session_id\": \"keep-me\",,}}}";
+                    File.WriteAllText(cf, broken);
+                    var cb = Config.Load();
+                    Check("config: a broken file reports an error", cb.Error != null, cb.Error ?? "(no error)");
+                    cb.Data["last_reset_reminder"] = "2026-10-01";
+                    cb.Save();
+                    Check("config: a broken file is never overwritten", File.ReadAllText(cf) == broken);
+                }
+                finally
+                {
+                    if (hadConfig != null) File.WriteAllBytes(cf, hadConfig);
+                    else try { File.Delete(cf); } catch (Exception) { }
+                }
             }
 
             try { Directory.Delete(Paths.AppDir, true); } catch (Exception) { }

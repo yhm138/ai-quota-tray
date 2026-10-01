@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using QuotaTray.Core;
 using QuotaTray.Win;
@@ -113,17 +114,34 @@ namespace QuotaTray.Providers
         }
 
         /// <summary>(plan, windows) from the subscription overview response.</summary>
-        public static Tuple<string, List<QuotaWindow>> ParseOverview(JObj payload)
+        public static Tuple<string, List<QuotaWindow>, List<InfoRow>> ParseOverview(JObj payload)
         {
             var data = payload?.Obj("data");
             string plan = null;
-            var disp = data?.Obj("current_subscription")?.Obj("display");
+            var rows = new List<InfoRow>();
+            var sub = data?.Obj("current_subscription");
+            var disp = sub?.Obj("display");
             if (disp != null)
                 foreach (var key in new[] { "short_name", "product_name" })
                 {
                     var v = disp.Str(key);
                     if (!string.IsNullOrEmpty(v)) { plan = v.Trim(); break; }
                 }
+            if (sub != null)
+            {
+                // The validity date the app shows ("free trial until ..."): the
+                // activity benefit end wins over the subscription's own period
+                // end -- different fields, not to be conflated.
+                var benefit = data?.Obj("campaign_benefit_info")?["benefit_end_time"];
+                var isGift = sub["is_gift"] is bool g && g;
+                DateTimeOffset? until = Positive(benefit) ? Time.Parse(benefit)
+                    : Positive(sub["end_time"]) ? Time.Parse(sub["end_time"]) : (DateTimeOffset?)null;
+                if (until != null)
+                {
+                    var label = (Positive(benefit) || isGift) ? "Bonus until" : "Plan until";
+                    rows.Add(new InfoRow(label, until.Value.ToLocalTime().ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)));
+                }
+            }
             var windows = new List<QuotaWindow>();
             var section = data?.Obj("window_limit_section");
             if (section != null)
@@ -153,7 +171,7 @@ namespace QuotaTray.Providers
                     }
                 }
             }
-            return Tuple.Create(plan, windows);
+            return Tuple.Create(plan, windows, rows);
         }
 
         private List<string> ExtraRoots()
@@ -262,8 +280,9 @@ namespace QuotaTray.Providers
                 return;
             }
             var parsed = ParseProfile(payload);
-            // The subscription overview adds the plan name and the window-limit
-            // usage; best effort (Doubao's web signing may reject our call).
+            // The subscription overview adds the plan name, the plan validity
+            // date and the window-limit usage; best effort (Doubao's web signing
+            // may reject our call).
             var overview = Overview(session.Item1, result);
             var plan = overview.Item1 ?? parsed.Item2;
             if (parsed.Item1 == null && plan == null && overview.Item2.Count == 0)
@@ -272,10 +291,12 @@ namespace QuotaTray.Providers
                 result.Status = "signed in, but Doubao returned no account";
                 return;
             }
+            var info = new List<InfoRow>(parsed.Item3);
+            info.AddRange(overview.Item3);
             result.Ok = true;
             result.Account = parsed.Item1;
             result.Plan = plan;
-            result.Info = parsed.Item3;
+            result.Info = info;
             result.Windows = overview.Item2;
             result.Headline = plan ?? "signed in";
             result.Source = "www.doubao.com/alice/commerce/sale/subscription/overview";
@@ -284,10 +305,10 @@ namespace QuotaTray.Providers
             result.Attempts.Add(new SourceAttempt("Doubao profile", true, parsed.Item1 ?? plan ?? "signed in"));
         }
 
-        /// <summary>Plan and window-limit usage, best effort. Never throws.</summary>
-        private Tuple<string, List<QuotaWindow>> Overview(string cookieHeader, ProviderResult result)
+        /// <summary>Plan, window-limit usage and plan-validity rows, best effort. Never throws.</summary>
+        private Tuple<string, List<QuotaWindow>, List<InfoRow>> Overview(string cookieHeader, ProviderResult result)
         {
-            var none = Tuple.Create((string)null, new List<QuotaWindow>());
+            var none = Tuple.Create((string)null, new List<QuotaWindow>(), new List<InfoRow>());
             var req = new HttpRequest { Method = "POST", Url = Http.Query(OverviewUrl, OverviewParams),
                 Body = "{\"product_line\":\"membership\"}", TimeoutSeconds = 20 };
             req.Headers["Cookie"] = cookieHeader;

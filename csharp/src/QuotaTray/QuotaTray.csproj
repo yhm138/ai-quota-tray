@@ -9,7 +9,7 @@
     <Nullable>disable</Nullable>
     <AssemblyName>QuotaTray</AssemblyName>
     <RootNamespace>QuotaTray</RootNamespace>
-    <Version>1.8.2</Version>
+    <Version>1.8.3</Version>
     <Product>QuotaTray</Product>
     <Description>Claude, Codex and Antigravity usage in the Windows tray</Description>
     <Copyright>MIT License</Copyright>
