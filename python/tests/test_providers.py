@@ -1307,6 +1307,25 @@ doubao.session = lambda: fake_session(get=doubao_401)
 r = doubao.DoubaoProvider(Config({"providers": {"doubao": {"session_id": "expired"}}})).fetch()
 check("doubao: expired login explained", not r.ok and "expired" in r.status.lower(), r.status)
 
+# Doubao answers an invalid login with HTTP 200 and an error code, not a 401.
+_invalid = {"code": 710012001, "msg": "\u767b\u5f55\u5df2\u8fc7\u671f", "message": "login invalid"}
+check("doubao: _login_invalid spots the 200 error code", doubao._login_invalid(_invalid))
+check("doubao: _login_invalid ignores a success", not doubao._login_invalid({"code": 0, "data": {}}))
+doubao.session = lambda: fake_session(get=lambda *a, **k: FakeResp(_invalid, 200))
+rinv = doubao.DoubaoProvider(Config({"providers": {"doubao": {"session_id": "stale"}}})).fetch()
+check("doubao: 200 login-invalid is reported as expired, not 'no account'",
+      not rinv.ok and "expired" in rinv.status.lower() and "no account" not in rinv.status.lower(), rinv.status)
+
+# session_id may be a whole "k=v; k=v" Cookie string, sent verbatim.
+_seen_cookie = {}
+def doubao_capture(url, headers=None, **_k):
+    _seen_cookie["h"] = (headers or {}).get("Cookie", "")
+    return FakeResp({"data": {"profile_brief": {"nickname": "\u5c0f\u8c46"}}})
+doubao.session = lambda: fake_session(get=doubao_capture, post=lambda *a, **k: FakeResp({"code": 1}, 200))
+doubao.DoubaoProvider(Config({"providers": {"doubao": {"session_id": "sessionid=abc; sid_tt=xyz"}}})).fetch()
+check("doubao: a full cookie string is sent verbatim",
+      _seen_cookie["h"] == "sessionid=abc; sid_tt=xyz", _seen_cookie["h"])
+
 # ------------------------------------------------------------------ DeepSeek
 
 print("\n--- DeepSeek ---")

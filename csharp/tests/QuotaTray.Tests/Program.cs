@@ -449,6 +449,16 @@ namespace QuotaTray.Tests
             Http.Send = req => new HttpReply(401, "<html>login</html>");
             var d401 = new DoubaoProvider(new Config()) { SessionOverride = () => Tuple.Create("expired", new List<string>()) }.Fetch();
             Check("doubao: expired login explained", !d401.Ok && d401.Status.ToLowerInvariant().Contains("expired"), d401.Status);
+            // Doubao answers an invalid login with HTTP 200 and an error code, not a 401.
+            Http.Send = req => new HttpReply(200, "{\"code\":710012001,\"msg\":\"\\u767b\\u5f55\\u5df2\\u8fc7\\u671f\",\"message\":\"login invalid\"}");
+            var dInvalid = new DoubaoProvider(new Config()) { SessionOverride = () => Tuple.Create("stale", new List<string>()) }.Fetch();
+            Check("doubao: 200 login-invalid reported as expired, not 'no account'",
+                !dInvalid.Ok && dInvalid.Status.ToLowerInvariant().Contains("expired") && !dInvalid.Status.ToLowerInvariant().Contains("no account"), dInvalid.Status);
+            // session_id may be a whole "k=v; k=v" Cookie string, sent verbatim.
+            string seenCookie = null;
+            Http.Send = req => { if (req.Url == DoubaoProvider.ProfileUrl) req.Headers.TryGetValue("Cookie", out seenCookie); return new HttpReply(200, req.Url == DoubaoProvider.ProfileUrl ? "{\"data\":{\"profile_brief\":{\"nickname\":\"\\u5c0f\\u8c46\"}}}" : "{\"code\":1}"); };
+            new DoubaoProvider(new Config(J("{\"providers\":{\"doubao\":{\"session_id\":\"sessionid=abc; sid_tt=xyz\"}}}"))).Fetch();
+            Check("doubao: a full cookie string is sent verbatim", seenCookie == "sessionid=abc; sid_tt=xyz", seenCookie);
 
             Console.WriteLine("--- DeepSeek ---");
             Check("jsonc comments and trailing commas", Json.Write(Json.ParseObject(DeepSeekProvider.StripJsonc(

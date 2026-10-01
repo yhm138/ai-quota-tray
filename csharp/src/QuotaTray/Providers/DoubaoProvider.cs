@@ -162,11 +162,29 @@ namespace QuotaTray.Providers
             return AppFolders.Any(f => Proc.AppRoots(f).Count > 0);
         }
 
-        private Tuple<string, List<string>> SessionKey()
+        // Doubao answers a stale/invalid login with HTTP 200 and this code, not a 401.
+        private static bool LoginInvalid(JObj payload)
         {
-            if (SessionOverride != null) return SessionOverride();
+            if (payload == null) return false;
+            var code = payload.Num("code");
+            if (code == null || code.Value == 0) return false;
+            var text = ((payload.Str("msg") ?? "") + " " + (payload.Str("message") ?? "")).ToLowerInvariant();
+            return (int)code.Value == 710012001 || text.Contains("login invalid") || text.Contains("\u767b\u5f55");
+        }
+
+        private static string AsCookieHeader(string value) =>
+            value == null ? null : (value.Contains("=") ? value : "sessionid=" + value);
+
+        private Tuple<string, List<string>> CookieHeader()
+        {
+            if (SessionOverride != null)
+            {
+                var ov = SessionOverride();
+                return Tuple.Create(AsCookieHeader(ov.Item1), ov.Item2);
+            }
+            // session_id may be a bare sessionid value or a whole "k=v; k=v" string.
             var manual = Core.Settings.Str(Settings, "session_id");
-            if (manual.Length > 0) return Tuple.Create(manual, new List<string> { "using session_id from config.json" });
+            if (manual.Length > 0) return Tuple.Create(AsCookieHeader(manual), new List<string> { "using session_id from config.json" });
             if (!Proc.IsWindows) return Tuple.Create((string)null, new List<string> { "reading the Doubao cookie is Windows-only" });
             var extra = ExtraRoots();
             var notes = new List<string>();
@@ -175,15 +193,21 @@ namespace QuotaTray.Providers
                 // The configured portable folder only needs searching once.
                 var got = ChromiumCookies.GetCookies(AppFolders[i], "doubao.com", "sessionid", i == 0 ? extra : null);
                 notes.AddRange(got.Item2);
-                if (got.Item1.TryGetValue("sessionid", out var key) && !string.IsNullOrEmpty(key))
-                    return Tuple.Create(key, notes);
+                if (got.Item1.ContainsKey("sessionid") || got.Item1.ContainsKey("session_id"))
+                {
+                    // Doubao validates more than the lone sessionid, so send every
+                    // cookie for the host, as the app does.
+                    var header = string.Join("; ", got.Item1.Where(kv => !string.IsNullOrEmpty(kv.Value))
+                        .Select(kv => kv.Key + "=" + kv.Value));
+                    return Tuple.Create(header, notes);
+                }
             }
             return Tuple.Create((string)null, notes);
         }
 
         public override void Collect(ProviderResult result)
         {
-            var session = SessionKey();
+            var session = CookieHeader();
             if (session.Item1 == null)
             {
                 result.Attempts.Add(new SourceAttempt("Doubao login", false,
@@ -193,7 +217,7 @@ namespace QuotaTray.Providers
             }
             var headers = new Dictionary<string, string>
             {
-                { "Cookie", "sessionid=" + session.Item1 },
+                { "Cookie", session.Item1 },
                 { "Accept", "application/json" },
                 { "Referer", "https://www.doubao.com/chat/" },
                 { "User-Agent", BrowserUa },
@@ -206,11 +230,13 @@ namespace QuotaTray.Providers
                 result.Status = "could not reach www.doubao.com";
                 return;
             }
-            if (resp.Status == 401 || resp.Status == 403)
+            var payload = Json.ParseObject(resp.Text);
+            // Doubao answers an invalid/expired login with HTTP 200 and an error
+            // code, not a 401, so that is checked before anything else.
+            if (resp.Status == 401 || resp.Status == 403 || LoginInvalid(payload))
             {
-                result.Attempts.Add(new SourceAttempt("Doubao profile", false,
-                    $"session cookie rejected (HTTP {resp.Status}); open Doubao Desktop to refresh it"));
-                result.Status = "Doubao login expired (open the app)";
+                result.Attempts.Add(new SourceAttempt("Doubao profile", false, "login rejected (expired or incomplete cookie)"));
+                result.Status = "Doubao login expired; re-sign in, or paste a fresh session_id";
                 return;
             }
             if (resp.Status >= 400)
@@ -219,7 +245,6 @@ namespace QuotaTray.Providers
                 result.Status = $"Doubao profile HTTP {resp.Status}";
                 return;
             }
-            var payload = Json.ParseObject(resp.Text);
             if (payload == null)
             {
                 result.Attempts.Add(new SourceAttempt("Doubao profile", false, "response was not JSON (a login page?)"));
@@ -250,12 +275,12 @@ namespace QuotaTray.Providers
         }
 
         /// <summary>Plan and window-limit usage, best effort. Never throws.</summary>
-        private Tuple<string, List<QuotaWindow>> Overview(string sessionKey, ProviderResult result)
+        private Tuple<string, List<QuotaWindow>> Overview(string cookieHeader, ProviderResult result)
         {
             var none = Tuple.Create((string)null, new List<QuotaWindow>());
             var req = new HttpRequest { Method = "POST", Url = Http.Query(OverviewUrl, OverviewParams),
                 Body = "{\"product_line\":\"membership\"}", TimeoutSeconds = 20 };
-            req.Headers["Cookie"] = "sessionid=" + sessionKey;
+            req.Headers["Cookie"] = cookieHeader;
             req.Headers["Accept"] = "application/json, text/plain, */*";
             req.Headers["Content-Type"] = "application/json";
             req.Headers["agw-js-conv"] = "str";

@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.8.1
+
+- **Doubao: a clear message when the login is stale, and a more complete
+  cookie.** Doubao answers an expired/invalid login with HTTP 200 and an
+  error code (`710012001`, "login invalid") rather than a 401, so the card
+  used to show the confusing "signed in, but Doubao returned no account". It
+  now says the login is expired and to re-sign in or paste a fresh
+  `session_id`. When reading the cookie from the app or a browser, QuotaTray
+  now sends **every** `doubao.com` cookie it finds (not just `sessionid`),
+  matching what the app sends, since Doubao validates more than the lone
+  `sessionid`. And `doubao.session_id` may now be a whole `name=value; ...`
+  Cookie string (paste the entire cookie), not just the bare `sessionid`
+
 ## v1.8.0
 
 - **Doubao can read the `doubao.com` cookie from your browser.** Turn on
