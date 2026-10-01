@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.8.3
+
+- **Doubao card shows the plan's validity date**, the way the app does
+  ("free trial until ..."). The activity-benefit end
+  (`campaign_benefit_info.benefit_end_time`) is shown as *Bonus until*, and
+  falls back to the subscription's own period end as *Plan until* when there
+  is no bonus — kept as separate fields so the two are never conflated.
+  (Cross-checked against the ChanningYuan/usageBar macOS project; our window
+  parsing, the `710012001` login-expired handling and the `aid`-only request
+  shape already matched.)
+
 ## v1.8.2
 
 - **Doubao windows read correctly off a full capture of the quota page.**

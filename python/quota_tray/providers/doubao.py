@@ -126,6 +126,7 @@ def parse_overview(payload: dict) -> tuple[str | None, list[QuotaWindow], list[I
     data = payload.get("data") if isinstance(payload, dict) else None
     data = data if isinstance(data, dict) else {}
     plan = None
+    rows: list[InfoRow] = []
     sub = data.get("current_subscription")
     if isinstance(sub, dict):
         disp = sub.get("display") if isinstance(sub.get("display"), dict) else {}
@@ -134,6 +135,17 @@ def parse_overview(payload: dict) -> tuple[str | None, list[QuotaWindow], list[I
             if isinstance(v, str) and v.strip():
                 plan = v.strip()
                 break
+        # The validity date the app shows ("free trial until ..."): the activity
+        # benefit end wins over the subscription's own period end -- they are
+        # different fields and must not be conflated.
+        benefit = (data.get("campaign_benefit_info") or {}).get("benefit_end_time") \
+            if isinstance(data.get("campaign_benefit_info"), dict) else None
+        is_gift = bool(sub.get("is_gift"))
+        until = parse_time(benefit) if _positive(benefit) else (
+            parse_time(sub.get("end_time")) if _positive(sub.get("end_time")) else None)
+        if until is not None:
+            label = "Bonus until" if (_positive(benefit) or is_gift) else "Plan until"
+            rows.append(InfoRow(label, until.astimezone().strftime("%Y-%m-%d")))
     windows: list[QuotaWindow] = []
     section = data.get("window_limit_section")
     order = 10
@@ -168,7 +180,7 @@ def parse_overview(payload: dict) -> tuple[str | None, list[QuotaWindow], list[I
                     detail=detail, order=order, exhausted=exhausted_all and pct >= 100,
                 ))
                 order += 1
-    return plan, windows, []
+    return plan, windows, rows
 
 
 class DoubaoProvider(Provider):
@@ -266,10 +278,12 @@ class DoubaoProvider(Provider):
             result.status = "Doubao returned no profile (open the app and sign in)"
             return
         account, plan, rows = parse_profile(payload if isinstance(payload, dict) else {})
-        # The subscription overview adds the plan name and the window-limit
-        # usage; it is best effort (Doubao's web signing may reject our call).
-        ov_plan, windows = self._overview(cookie_header, result)
+        # The subscription overview adds the plan name, the plan validity date
+        # and the window-limit usage; it is best effort (Doubao's web signing
+        # may reject our call).
+        ov_plan, windows, ov_rows = self._overview(cookie_header, result)
         plan = ov_plan or plan
+        rows = rows + ov_rows
         if not account and not plan and not windows:
             result.attempts.append(SourceAttempt("Doubao profile", False, f"no account in response: {str(payload)[:160]}"))
             result.status = "signed in, but Doubao returned no account"
@@ -288,8 +302,8 @@ class DoubaoProvider(Provider):
         result.data_time = now_utc()
         result.attempts.append(SourceAttempt("Doubao profile", True, account or plan or "signed in"))
 
-    def _overview(self, cookie_header: str, result: ProviderResult) -> tuple[str | None, list[QuotaWindow]]:
-        """Plan and window-limit usage, best effort. Never raises."""
+    def _overview(self, cookie_header: str, result: ProviderResult) -> tuple[str | None, list[QuotaWindow], list[InfoRow]]:
+        """Plan, window-limit usage and plan-validity rows, best effort. Never raises."""
         headers = {
             "Cookie": cookie_header,
             "Accept": "application/json, text/plain, */*",
@@ -303,21 +317,21 @@ class DoubaoProvider(Provider):
                                   json={"product_line": "membership"}, timeout=20)
         except Exception as exc:                                # noqa: BLE001
             result.attempts.append(SourceAttempt("Doubao overview", False, f"request failed: {exc}"))
-            return None, []
+            return None, [], []
         if resp.status_code >= 400:
             result.attempts.append(SourceAttempt("Doubao overview", False, f"HTTP {resp.status_code}"))
-            return None, []
+            return None, [], []
         try:
             payload = resp.json()
         except ValueError:
             result.attempts.append(SourceAttempt("Doubao overview", False, "response was not JSON"))
-            return None, []
+            return None, [], []
         if not isinstance(payload, dict) or payload.get("code") not in (0, None):
             result.attempts.append(SourceAttempt("Doubao overview", False,
                 f"code {payload.get('code')}: {str(payload.get('msg') or payload.get('message'))[:120]}"
                 if isinstance(payload, dict) else "unexpected response"))
-            return None, []
-        plan, windows, _ = parse_overview(payload)
+            return None, [], []
+        plan, windows, ov_rows = parse_overview(payload)
         result.attempts.append(SourceAttempt("Doubao overview", True,
             f"{len(windows)} window(s)" + (f", {plan}" if plan else "")))
-        return plan, windows
+        return plan, windows, ov_rows
