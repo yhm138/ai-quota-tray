@@ -34,6 +34,7 @@ namespace QuotaTray.Core
         public int TimeoutSeconds = 20;
         public bool Insecure;                   // localhost only: self-signed language server
         public bool FollowRedirects = true;
+        public bool UseCookies = true;          // false sends only the explicit Cookie header
     }
 
     /// <summary>
@@ -45,6 +46,7 @@ namespace QuotaTray.Core
         public static Func<HttpRequest, HttpReply> Send = RealSend;
 
         private static HttpClient _client, _insecure, _noRedirect;
+        private static readonly Dictionary<int, HttpClient> ExplicitCookieClients = new Dictionary<int, HttpClient>();
         private static readonly object Gate = new object();
 
         public static HttpReply Get(string url, Dictionary<string, string> headers = null, int timeout = 20,
@@ -93,6 +95,27 @@ namespace QuotaTray.Core
                         UseProxy = false,
                         ServerCertificateCustomValidationCallback = (m, c, ch, e) => true,
                     }) { Timeout = Timeout.InfiniteTimeSpan };
+                }
+                if (!req.UseCookies)
+                {
+                    // .NET Framework's CookieContainer can replace a caller's
+                    // explicit Cookie header. Keep those requests in separate
+                    // clients, preserving the proxy/TLS/redirect policy.
+                    var key = (req.Insecure ? 1 : 0) | (req.FollowRedirects ? 2 : 0);
+                    if (!ExplicitCookieClients.TryGetValue(key, out var client))
+                    {
+                        var handler = new HttpClientHandler
+                        {
+                            UseCookies = false,
+                            AllowAutoRedirect = req.FollowRedirects,
+                            UseProxy = !req.Insecure,
+                            AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+                        };
+                        if (req.Insecure) handler.ServerCertificateCustomValidationCallback = (m, c, ch, e) => true;
+                        client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
+                        ExplicitCookieClients[key] = client;
+                    }
+                    return client;
                 }
                 if (req.Insecure) return _insecure;
                 return req.FollowRedirects ? _client : _noRedirect;

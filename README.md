@@ -152,6 +152,13 @@ dotnet run --project csharp\tests\QuotaTray.Tests     # offline checks
 `QuotaTray.exe --diagnose` writes the source report, `--selftest` checks
 AES-GCM, the tray icon and the panel on this machine.
 
+On Windows, test scroll clipping with synthetic cards at 100%, 125% and 150%
+scale. This renders offscreen without reading account settings:
+
+```powershell
+powershell.exe -NoProfile -STA -File csharp\tests\Run-PanelScrollRegression.ps1 -AssemblyPath csharp\src\QuotaTray\bin\Release\net48\QuotaTray.exe
+```
+
 ## The scripts
 
 Python edition scripts live in `python/`, maintainer scripts in `scripts/`.
@@ -287,10 +294,15 @@ account, and reads the subscription *overview*
 (`/alice/commerce/sale/subscription/overview`) for the plan and the
 **window-limit usage** — a *Current period* window and a *Last 7 days* one. A
 period that has not started yet shows "not started" (no 1970 date), and a
-window under one percent shows "<1% used". The plan's validity date is shown
-too (*Bonus until* for an activity benefit, else *Plan until*). The overview
-call is best effort: if Doubao's web signing rejects it, the card still shows
-the account and plan.
+window under one percent shows "<1% used". The card also shows the API's
+active/inactive plan status, with trial or gift status when explicitly supplied.
+The subscription's *Plan until* and promotional *Bonus until* are separate
+rows, shown in local time to the minute. *Quota group* names the usage group;
+when several groups have usage, each bar is prefixed with its group name.
+Unknown status codes are not interpreted, and missing fields are omitted.
+The profile POST is optional: a profile failure does not prevent the overview
+from supplying plan and usage data. If only the profile succeeds, the card
+keeps its account information and explains why usage is unavailable.
 
 - **Portable install?** Set `doubao.data_dir` in config.json to the folder that
   holds the app's cookie store (the portable install folder, or its `User Data`
@@ -557,6 +569,12 @@ dotnet run --project csharp\tests\QuotaTray.Tests     # 离线测试
 
 `QuotaTray.exe --diagnose` 输出各数据源的探测报告，`--selftest` 在本机检查 AES-GCM、托盘图标和面板。
 
+Windows 上还可检查滚动裁剪：用人工数据在 100%、125%、150% 缩放下离屏绘制，不读取账号配置。
+
+```powershell
+powershell.exe -NoProfile -STA -File csharp\tests\Run-PanelScrollRegression.ps1 -AssemblyPath csharp\src\QuotaTray\bin\Release\net48\QuotaTray.exe
+```
+
 ## 各个脚本
 
 Python 版的脚本在 `python/`，维护者脚本在 `scripts/`。
@@ -639,7 +657,9 @@ TRAE 把它的 Cloud-IDE JWT 存在 `%APPDATA%\Trae CN\User\globalStorage\storag
 
 ### 豆包
 
-豆包桌面客户端是 www.doubao.com 的 Electron 应用。QuotaTray 从它的 cookie 库里读 `sessionid` cookie（和 Claude Desktop 一样的 OSCrypt/DPAPI + AES-GCM 方案），调 `/alice/profile/self` 拿登录账号，再调订阅 overview 接口（`/alice/commerce/sale/subscription/overview`）拿套餐和**窗口额度用量**——一个"当前时段"窗口和一个"近 7 天"窗口。尚未开始的时段显示"not started"（不会显示 1970 年），用量不足 1% 的窗口显示"<1% used"。还会显示套餐有效期（活动赠送显示 *Bonus until*，否则显示订阅本期结束 *Plan until*）。overview 是尽力而为：如果豆包的网页签名拒绝了请求，卡片仍会显示账号和套餐。
+豆包桌面客户端是 www.doubao.com 的 Electron 应用。QuotaTray 从它的 cookie 库里读 `sessionid` cookie（和 Claude Desktop 一样的 OSCrypt/DPAPI + AES-GCM 方案），通过订阅 overview 接口（`/alice/commerce/sale/subscription/overview`）拿套餐和**窗口额度用量**，包括“当前时段”和“近 7 天”。尚未开始的时段显示“not started”（不会显示 1970 年），用量不足 1% 的窗口显示“<1% used”。
+
+卡片还会显示接口明确返回的套餐有效状态（*Plan status*），以及试用或赠送标记。套餐本期结束时间（*Plan until*）和活动权益到期时间（*Bonus until*）分成两行，以本地时间显示到分钟。*Quota group* 显示额度分组；多组有用量时，每条用量条都会带上组名。缺少的字段不显示，未知状态码不作推断。`/alice/profile/self` 的 POST 请求用于补充账号信息；它失败时，用量接口仍独立工作。如果只有账号查询成功，卡片会保留账号，并说明用量不可用的原因。
 
 - **便携版（Portable）？** 在 config.json 里把 `doubao.data_dir` 设成存放 cookie 库的文件夹（便携版安装目录，或其下的 `User Data` 子目录）。
 - **想用浏览器而不是客户端？** 把 `doubao.scan_browsers` 设成 `true`，QuotaTray 也会从 Edge、Chrome、Brave、Chromium、Vivaldi、Opera（所有 profile）里读 `doubao.com` 的 cookie。默认关闭。

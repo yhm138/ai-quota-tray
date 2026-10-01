@@ -19,6 +19,20 @@ from quota_tray.config import Config                                  # noqa: E4
 from quota_tray.model import ProviderResult, humanize_delta, now_utc  # noqa: E402
 from quota_tray.providers import antigravity, claude, codex           # noqa: E402
 from quota_tray.ui.icon import render                                 # noqa: E402
+from quota_tray.win import chromium_cookies as _test_cookies         # noqa: E402
+
+# Installed apps and signed-in accounts must not participate in offline tests.
+# Dedicated discovery tests below explicitly install their own fixtures.
+_real_desktop_oauth_tokens = claude.desktop_oauth_tokens
+claude.desktop_oauth_tokens = lambda: ([], [])
+claude.load_cached_session = lambda: {}
+claude.save_cached_session = lambda _jar: None
+claude.forget_cached_session = lambda: None
+_real_get_cookies = _test_cookies.get_cookies
+_test_cookies.get_cookies = lambda *a, **k: ({}, ["no fixture cookies"])
+_offline_codex_home = Path(tempfile.mkdtemp())
+codex.codex_homes = lambda settings: [(Path(settings.get("codex_home") or _offline_codex_home), "Codex")]
+codex.find_codex_exe = lambda: None
 
 PASS, FAIL = [], []
 
@@ -223,7 +237,7 @@ desk.mkdir()
 real_master = cc_mod.master_key
 cc_mod.master_key = lambda _p: desk_key
 try:
-    toks, notes = claude.desktop_oauth_tokens([desk])
+    toks, notes = _real_desktop_oauth_tokens([desk])
 finally:
     cc_mod.master_key = real_master
 check("desktop login: V2 full-scope token first",
@@ -385,6 +399,7 @@ check("IDE-not-running degrades", (not r.ok) and "not running" in r.status, r.st
 # ------------------------------------------------------------------ cookie store
 
 print("\n--- Electron cookie store ---")
+_test_cookies.get_cookies = _real_get_cookies
 import sqlite3                                                   # noqa: E402
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM   # noqa: E402
@@ -1044,7 +1059,7 @@ finally:
 check("copy started by an old version relaunches clean once",
       stepped_aside and not again and len(launched) == 1
       and launched[0][0][-1] == "--fresh" and "4321" in launched[0][0]
-      and launched[0][1].get("PYINSTALLER_RESET_ENVIRONMENT") == "1", launched)
+      and launched[0][1].get("PYINSTALLER_RESET_ENVIRONMENT") == "1")
 
 # ------------------------------------------------------------------ TLS bundle
 
@@ -1266,13 +1281,30 @@ _ov = {"code": 0, "data": {
         ]}]}}}
 ov_plan, ov_windows, ov_rows = doubao.parse_overview(_ov)
 check("doubao: overview plan name", ov_plan == "\u6807\u51c6\u5957\u9910", ov_plan)
-# campaign benefit end wins over the subscription end_time (app shows "free trial until").
-check("doubao: benefit end becomes a Bonus-until row",
-      any(r.label == "Bonus until" and r.value == "2026-10-19" for r in ov_rows), [(r.label, r.value) for r in ov_rows])
-# No benefit -> fall back to the subscription's own end_time, labelled Plan until.
+# Subscription and campaign deadlines are independent, shown to local minutes.
+_doubao_plan_until = datetime.fromtimestamp(1794303044488 / 1000).strftime("%Y-%m-%d %H:%M")
+_doubao_bonus_until = datetime.fromtimestamp(1792393764820 / 1000).strftime("%Y-%m-%d %H:%M")
+check("doubao: plan and bonus deadlines are both preserved in order",
+      [(r.label, r.value) for r in ov_rows] == [
+          ("Plan until", _doubao_plan_until), ("Bonus until", _doubao_bonus_until),
+          ("Quota group", "General")])
 _pu = doubao.parse_overview({"code": 0, "data": {"current_subscription": {"end_time": 1794303044488}}})[2]
 check("doubao: plain subscription end becomes a Plan-until row",
-      any(r.label == "Plan until" and r.value == "2026-11-10" for r in _pu), [(r.label, r.value) for r in _pu])
+      [(r.label, r.value) for r in _pu] == [("Plan until", _doubao_plan_until)])
+_bonus_only = doubao.parse_overview({"code": 0, "data": {
+    "campaign_benefit_info": {"benefit_end_time": 1792393764820}}})[2]
+check("doubao: campaign deadline needs no current subscription",
+      [(r.label, r.value) for r in _bonus_only] == [("Bonus until", _doubao_bonus_until)])
+_gift_deadline = doubao.parse_overview({"code": 0, "data": {
+    "current_subscription": {"is_gift": True, "end_time": 1794303044488}}})[2]
+check("doubao: a gift does not relabel the subscription deadline as a bonus deadline",
+      [(r.label, r.value) for r in _gift_deadline] == [("Plan until", _doubao_plan_until)])
+for _end in (0, -1, True, "1794303044488", 1, float("inf")):
+    _deadline_rows = doubao.parse_overview({"code": 0, "data": {
+        "current_subscription": {"end_time": _end},
+        "campaign_benefit_info": {"benefit_end_time": _end}}})[2]
+    check(f"doubao: invalid deadline {type(_end).__name__} {_end!r} omitted",
+          not _deadline_rows)
 check("doubao: windows labelled by type (current period, last 7 days)",
       [w.label for w in ov_windows] == ["Current period", "Last 7 days"], [w.label for w in ov_windows])
 check("doubao: not-started window has no 1970 reset", ov_windows[0].resets_at is None and ov_windows[0].detail == "not started",
@@ -1287,22 +1319,175 @@ _busy = doubao.parse_overview({"code": 0, "data": {"window_limit_section": {"win
 check("doubao: a used window shows its percent, no <1%", _busy[0].percent == 42.0 and _busy[0].detail is None, (_busy[0].percent, _busy[0].detail))
 
 
-def doubao_get(url, headers=None, **_k):
-    check("doubao: sends the sessionid cookie", "sessionid=sk-cookie" in (headers or {}).get("Cookie", ""),
-          headers)
-    return FakeResp({"data": {"profile_brief": {"nickname": "\u5c0f\u8c46", "vip_type": 2}}})
+_doubao_status_cases = [
+    ("active", True, {}, ("Active", "good")),
+    ("inactive", False, {}, ("Inactive", "warn")),
+    ("active trial", True, {"trial_info": {"is_trialing": True}}, ("Active (trial)", "good")),
+    ("active gift", True, {"is_gift": True}, ("Active (gift)", "good")),
+    ("trial before gift", True, {"trial_info": {"is_trialing": True}, "is_gift": True},
+     ("Active (trial)", "good")),
+    ("inactive without trial or gift suffix", False, {"trial_info": {"is_trialing": True}, "is_gift": True},
+     ("Inactive", "warn")),
+    ("numeric trial flag ignored", True, {"trial_info": {"is_trialing": 1}, "is_gift": True},
+     ("Active (gift)", "good")),
+    ("numeric gift flag ignored", True, {"is_gift": 1}, ("Active", "good")),
+    ("string trial and gift flags ignored", True, {"trial_info": {"is_trialing": "true"}, "is_gift": "true"},
+     ("Active", "good")),
+    ("numeric member flag ignored", 1, {}, None),
+    ("zero member flag ignored", 0, {}, None),
+    ("string member flag ignored", "true", {}, None),
+    ("null member flag ignored", None, {}, None),
+]
+for _case, _active, _sub, _expected in _doubao_status_cases:
+    _status_rows = doubao.parse_overview({"code": 0, "data": {
+        "member_info": {"hasActiveSubscription": _active}, "current_subscription": _sub}})[2]
+    check(f"doubao: plan status {_case}",
+          [(r.value, r.tone) for r in _status_rows if r.label == "Plan status"]
+          == ([_expected] if _expected else []))
+_missing_status = doubao.parse_overview({"code": 0, "data": {
+    "current_subscription": {"status": 1, "is_gift": True}}})[2]
+check("doubao: missing member status is not inferred from subscription enums",
+      all(r.label != "Plan status" for r in _missing_status))
+_active_without_sub = doubao.parse_overview({"code": 0, "data": {
+    "member_info": {"hasActiveSubscription": True}}})[2]
+check("doubao: explicit member status needs no subscription object",
+      [(r.label, r.value, r.tone) for r in _active_without_sub] == [("Plan status", "Active", "good")])
 
 
-def doubao_post(url, headers=None, **_k):
-    check("doubao: overview is a signed-str POST", (headers or {}).get("agw-js-conv") == "str", headers)
-    return FakeResp(_ov)
+def doubao_group_overview(groups):
+    return {"code": 0, "data": {"window_limit_section": {
+        "usage_exhausted": False, "window_limit_groups": groups}}}
 
 
-doubao.session = lambda: fake_session(get=doubao_get, post=doubao_post)
-dp = doubao.DoubaoProvider(Config({"providers": {"doubao": {"session_id": "sk-cookie"}}}))
-dp.detect = lambda: True
-r = dp.fetch()
-check("doubao connects", r.ok and "overview" in r.source, r.status)
+_doubao_original_windows = _ov["data"]["window_limit_section"]["window_limit_groups"][0]["window_limits"]
+_single_named = doubao_group_overview([{"feature_group": "general",
+    "feature_group_name": "  Standard\t AI\n quota  ", "window_limits": _doubao_original_windows}])
+_, _named_windows, _named_rows = doubao.parse_overview(_single_named)
+check("doubao: single group name collapses whitespace without changing window labels",
+      [(r.label, r.value) for r in _named_rows] == [("Quota group", "Standard AI quota")]
+      and [w.label for w in _named_windows] == ["Current period", "Last 7 days"])
+_single_fallback = doubao_group_overview([
+    {"feature_group_name": "Empty", "window_limits": []},
+    {"feature_group_name": "Invalid", "window_limits": [{"used_percent": True}, {"used_percent": "12"}]},
+    {"feature_group": "unconfirmed-enum", "feature_group_name": " \n ",
+     "window_limits": _doubao_original_windows},
+])
+_, _fallback_windows, _fallback_rows = doubao.parse_overview(_single_fallback)
+check("doubao: only usable groups count, fallback uses original group position",
+      [(r.label, r.value) for r in _fallback_rows] == [("Quota group", "Group 3")]
+      and [w.label for w in _fallback_windows] == ["Current period", "Last 7 days"])
+
+_multi_groups = doubao_group_overview([
+    None,
+    {"feature_group_name": "Unused group", "window_limits": [{"used_percent": None}]},
+    {"feature_group": "alpha", "feature_group_name": " Shared\n pool ",
+     "window_limits": [_doubao_original_windows[0]]},
+    {"feature_group": "beta", "feature_group_name": "Shared pool",
+     "window_limits": [_doubao_original_windows[1]]},
+    {"feature_group": "general", "feature_group_name": 123,
+     "window_limits": [{"start_time": 1790457137809, "end_time": 1791061937809,
+                        "used_percent": 42, "window_type": 2}]},
+])
+_, _multi_windows, _multi_rows = doubao.parse_overview(_multi_groups)
+check("doubao: duplicate display names use effective group positions",
+      [(r.label, r.value) for r in _multi_rows]
+      == [("Quota groups", "Shared pool (1), Shared pool (2), General")])
+check("doubao: multiple groups prefix every window with its display name",
+      [w.label for w in _multi_windows]
+      == ["Shared pool (1) \u00b7 Current period", "Shared pool (2) \u00b7 Last 7 days", "General \u00b7 Last 7 days"])
+check("doubao: group display does not alter keys, ordering, percentages or reset details",
+      [(w.key, w.order, w.percent, w.resets_at, w.detail, w.exhausted) for w in _multi_windows] == [
+          ("doubao-alpha-1-10", 10, 0.0, ov_windows[0].resets_at, "not started", False),
+          ("doubao-beta-2-11", 11, 0.0, ov_windows[1].resets_at, "<1% used", False),
+          ("doubao-general-2-12", 12, 42.0, ov_windows[1].resets_at, None, False),
+      ])
+_, _no_windows, _no_group_rows = doubao.parse_overview(doubao_group_overview([
+    {"feature_group_name": "Empty", "window_limits": []},
+    {"feature_group_name": "Invalid", "window_limits": [{"used_percent": False}]},
+]))
+check("doubao: no usable quota groups produce no group details", not _no_windows and not _no_group_rows)
+
+_doubao_details_payload = json.loads(json.dumps(_ov))
+_doubao_details_payload["data"].update({
+    "member_info": {"hasActiveSubscription": True},
+    "window_limit_section": _multi_groups["data"]["window_limit_section"],
+})
+_doubao_details_payload["data"]["current_subscription"]["trial_info"] = {"is_trialing": True}
+_detail_plan, _detail_windows, _detail_rows = doubao.parse_overview(_doubao_details_payload)
+check("doubao: overview detail rows have stable order and local minute precision",
+      [(r.label, r.value, r.tone) for r in _detail_rows] == [
+          ("Plan status", "Active (trial)", "good"),
+          ("Plan until", _doubao_plan_until, ""),
+          ("Bonus until", _doubao_bonus_until, ""),
+          ("Quota groups", "Shared pool (1), Shared pool (2), General", ""),
+      ])
+_details_result = ProviderResult("doubao", "Doubao", ok=True, plan=_detail_plan,
+                                 windows=_detail_windows, info=_detail_rows)
+_cached_details = ProviderResult.from_cache(json.loads(json.dumps(_details_result.to_cache())))
+check("doubao: status, independent deadlines, group labels and tones survive cache",
+      _cached_details.info == _details_result.info and _cached_details.windows == _details_result.windows
+      and _cached_details.plan == _details_result.plan)
+
+
+_doubao_profile = {"code": 0, "data": {"profile_brief": {"nickname": "\u5c0f\u8c46", "vip_type": 2}}}
+# Artificial markers only: never put a captured Cookie or response in fixtures.
+_doubao_private_marker = "fixture-private-content-must-not-appear"
+
+
+def doubao_fetch(profile_response, overview_response, cookie="sk-cookie"):
+    """Exercise both endpoints with independent responses, recording requests/logs."""
+    import io
+    import logging
+
+    calls = []
+    captured_logs = io.StringIO()
+    handler = logging.StreamHandler(captured_logs)
+    logger = logging.getLogger("quota_tray")
+
+    def post(url, **kwargs):
+        calls.append((url, kwargs))
+        if url == doubao.PROFILE_URL:
+            response = profile_response
+        elif url == doubao.OVERVIEW_URL:
+            response = overview_response
+        else:
+            raise AssertionError("unexpected Doubao endpoint")
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    doubao.session = lambda: fake_session(post=post)
+    provider = doubao.DoubaoProvider(Config({"providers": {"doubao": {"session_id": cookie}}}))
+    provider.detect = lambda: True
+    logger.addHandler(handler)
+    try:
+        result = provider.fetch()
+    finally:
+        logger.removeHandler(handler)
+    return result, calls, captured_logs.getvalue()
+
+
+def doubao_private_output_absent(result, logs):
+    # Cover status, diagnostics, cached fields, and log messages/tracebacks.
+    return _doubao_private_marker not in (repr(result) + json.dumps(result.to_cache()) + logs)
+
+
+r, _doubao_calls, _doubao_logs = doubao_fetch(FakeResp(_doubao_profile), FakeResp(_ov))
+check("doubao: profile and overview both use POST",
+      [url for url, _ in _doubao_calls] == [doubao.PROFILE_URL, doubao.OVERVIEW_URL])
+check("doubao: both POST requests send the configured cookie and str conversion",
+      len(_doubao_calls) == 2 and all(
+          kw["headers"].get("Cookie") == "sessionid=sk-cookie"
+          and kw["headers"].get("agw-js-conv") == "str" for _, kw in _doubao_calls))
+check("doubao: neither request redirects credentials",
+      len(_doubao_calls) == 2 and all(kw.get("allow_redirects") is False for _, kw in _doubao_calls))
+check("doubao: profile uses browser request parameters and avatar format",
+      bool(_doubao_calls) and _doubao_calls[0][1].get("params") == doubao.OVERVIEW_PARAMS
+      and _doubao_calls[0][1].get("json") == {"avatar_format": "png"})
+check("doubao: overview retains membership body and stable parameters",
+      len(_doubao_calls) == 2 and _doubao_calls[1][1].get("params") == doubao.OVERVIEW_PARAMS
+      and _doubao_calls[1][1].get("json") == {"product_line": "membership"})
+check("doubao connects", r.ok and "overview" in (r.source or ""), r.status)
 check("doubao: account and overview plan win", r.account == "\u5c0f\u8c46" and r.plan == "\u6807\u51c6\u5957\u9910"
       and r.billing == "subscription", (r.account, r.plan))
 check("doubao: window bars shown", [w.label for w in r.sorted_windows()] == ["Current period", "Last 7 days"],
@@ -1310,40 +1495,102 @@ check("doubao: window bars shown", [w.label for w in r.sorted_windows()] == ["Cu
 check("doubao: survives the cache",
       [w.label for w in ProviderResult.from_cache(json.loads(json.dumps(r.to_cache()))).windows] == ["Current period", "Last 7 days"])
 
-# If the overview call is rejected (web signing), the card still shows the account.
-doubao.session = lambda: fake_session(get=doubao_get, post=lambda *a, **k: FakeResp({"code": 1, "msg": "verify"}, 200))
-dp2 = doubao.DoubaoProvider(Config({"providers": {"doubao": {"session_id": "sk-cookie"}}}))
-dp2.detect = lambda: True
-r2 = dp2.fetch()
-check("doubao: survives an overview rejection", r2.ok and r2.account == "\u5c0f\u8c46" and not r2.windows, r2.status)
-
-
-def doubao_401(url, headers=None, **_k):
-    return FakeResp("<html>login</html>", 401)
-
-
-doubao.session = lambda: fake_session(get=doubao_401)
-r = doubao.DoubaoProvider(Config({"providers": {"doubao": {"session_id": "expired"}}})).fetch()
-check("doubao: expired login explained", not r.ok and "expired" in r.status.lower(), r.status)
-
 # Doubao answers an invalid login with HTTP 200 and an error code, not a 401.
 _invalid = {"code": 710012001, "msg": "\u767b\u5f55\u5df2\u8fc7\u671f", "message": "login invalid"}
 check("doubao: _login_invalid spots the 200 error code", doubao._login_invalid(_invalid))
 check("doubao: _login_invalid ignores a success", not doubao._login_invalid({"code": 0, "data": {}}))
-doubao.session = lambda: fake_session(get=lambda *a, **k: FakeResp(_invalid, 200))
-rinv = doubao.DoubaoProvider(Config({"providers": {"doubao": {"session_id": "stale"}}})).fetch()
-check("doubao: 200 login-invalid is reported as expired, not 'no account'",
-      not rinv.ok and "expired" in rinv.status.lower() and "no account" not in rinv.status.lower(), rinv.status)
+
+
+class DoubaoNonJson(FakeResp):
+    def __init__(self, status=200):
+        super().__init__({}, status)
+        self.text = "<html>" + _doubao_private_marker + "</html>"
+
+    def json(self):
+        raise ValueError(_doubao_private_marker)
+
+
+_doubao_expired = "Doubao login expired; re-sign in, or paste a fresh session_id"
+_doubao_failures = [
+    ("HTTP 404", DoubaoNonJson(404), "Doubao {source} HTTP 404"),
+    ("HTTP 401", DoubaoNonJson(401), _doubao_expired),
+    ("HTTP 403", DoubaoNonJson(403), _doubao_expired),
+    ("HTTP 500", DoubaoNonJson(500), "Doubao {source} HTTP 500"),
+    ("login-invalid JSON", FakeResp({"code": 710012001, "msg": _doubao_private_marker}), _doubao_expired),
+    ("other API error", FakeResp({"code": 12345, "msg": _doubao_private_marker,
+                                 "data": _ov["data"]}), "Doubao {source} API code 12345"),
+    ("non-JSON", DoubaoNonJson(), "Doubao {source} returned non-JSON"),
+    ("network exception", RuntimeError(_doubao_private_marker), "could not reach Doubao {source}"),
+]
+
+# The real incident was a profile 404 suppressing a successful overview. All
+# profile failures must leave the independent quota request usable.
+for _case, _failure, _expected in _doubao_failures:
+    _result, _calls, _logs = doubao_fetch(_failure, FakeResp(_ov))
+    check(f"doubao: profile {_case} does not suppress overview usage",
+          _result.ok and _result.status == "connected" and len(_result.windows) == 2
+          and _result.account is None and _result.plan == "\u6807\u51c6\u5957\u9910"
+          and [url for url, _ in _calls] == [doubao.PROFILE_URL, doubao.OVERVIEW_URL], _result.status)
+    check(f"doubao: profile {_case} stays in diagnostics without private data",
+          any(a.name == "Doubao profile" and not a.ok for a in _result.attempts)
+          and doubao_private_output_absent(_result, _logs))
+
+# If usage fails but the profile succeeds, keep the identity and expose the
+# specific quota failure instead of claiming the account has no usage windows.
+for _case, _failure, _expected in _doubao_failures:
+    _result, _calls, _logs = doubao_fetch(FakeResp(_doubao_profile), _failure)
+    _usage_failure = _expected.format(source="overview")
+    check(f"doubao: overview {_case} preserves account and names the failure",
+          _result.ok and _result.account == "\u5c0f\u8c46" and not _result.windows
+          and _result.status == "signed in; usage unavailable: " + _usage_failure, _result.status)
+    check(f"doubao: overview {_case} diagnostics do not disclose private data",
+          any(a.name == "Doubao overview" and not a.ok for a in _result.attempts)
+          and doubao_private_output_absent(_result, _logs))
+
+    _result, _, _logs = doubao_fetch(DoubaoNonJson(404), _failure)
+    check(f"doubao: both requests fail with {_case}; overview failure wins",
+          not _result.ok and _result.status == _usage_failure
+          and doubao_private_output_absent(_result, _logs), _result.status)
+
+# A valid response without quota windows is distinct from an unavailable API.
+_empty_overview = FakeResp({"code": 0, "data": {"window_limit_section": {}}})
+_result, _, _ = doubao_fetch(FakeResp(_doubao_profile), _empty_overview)
+check("doubao: successful empty usage is explicitly reported",
+      _result.ok and not _result.windows
+      and _result.status == "connected (Doubao returned no usage windows)"
+      and any(a.name == "Doubao overview" and a.ok for a in _result.attempts), _result.status)
+_result, _, _ = doubao_fetch(DoubaoNonJson(404), FakeResp({"code": 0, "data": {
+    "current_subscription": {"display": {"short_name": "Test Plan"}}}}))
+check("doubao: overview plan alone survives a missing profile",
+      _result.ok and _result.plan == "Test Plan" and _result.account is None
+      and _result.status == "connected (Doubao returned no usage windows)", _result.status)
+_result, _, _ = doubao_fetch(DoubaoNonJson(404), FakeResp({"code": 0, "data": {
+    "window_limit_section": _ov["data"]["window_limit_section"]}}))
+check("doubao: overview windows alone are usable",
+      _result.ok and _result.status == "connected" and len(_result.windows) == 2
+      and _result.account is None and _result.plan is None, _result.status)
+_result, _, _ = doubao_fetch(DoubaoNonJson(404), FakeResp({"code": 0, "data": {
+    "member_info": {"hasActiveSubscription": False}}}))
+check("doubao: inactive membership alone survives a missing profile",
+      _result.ok and _result.account is None and _result.plan is None and not _result.windows
+      and _result.source == "www.doubao.com/alice/commerce/sale/subscription/overview"
+      and _result.status == "connected (Doubao returned no usage windows)"
+      and [(row.label, row.value, row.tone) for row in _result.info]
+      == [("Plan status", "Inactive", "warn")])
+_result, _, _ = doubao_fetch(DoubaoNonJson(404), FakeResp({"code": 0, "data": {
+    "campaign_benefit_info": {"benefit_end_time": 1792393764820}}}))
+check("doubao: campaign deadline alone survives without profile or subscription",
+      _result.ok and _result.account is None and _result.plan is None and not _result.windows
+      and _result.source == "www.doubao.com/alice/commerce/sale/subscription/overview"
+      and _result.status == "connected (Doubao returned no usage windows)"
+      and [(row.label, row.value) for row in _result.info] == [("Bonus until", _doubao_bonus_until)])
+_result, _, _ = doubao_fetch(FakeResp({"code": 0, "data": {}}), _empty_overview)
+check("doubao: empty responses do not claim a connected account", not _result.ok, _result.status)
 
 # session_id may be a whole "k=v; k=v" Cookie string, sent verbatim.
-_seen_cookie = {}
-def doubao_capture(url, headers=None, **_k):
-    _seen_cookie["h"] = (headers or {}).get("Cookie", "")
-    return FakeResp({"data": {"profile_brief": {"nickname": "\u5c0f\u8c46"}}})
-doubao.session = lambda: fake_session(get=doubao_capture, post=lambda *a, **k: FakeResp({"code": 1}, 200))
-doubao.DoubaoProvider(Config({"providers": {"doubao": {"session_id": "sessionid=abc; sid_tt=xyz"}}})).fetch()
+_, _calls, _ = doubao_fetch(FakeResp(_doubao_profile), FakeResp(_ov), "sessionid=abc; sid_tt=xyz")
 check("doubao: a full cookie string is sent verbatim",
-      _seen_cookie["h"] == "sessionid=abc; sid_tt=xyz", _seen_cookie["h"])
+      len(_calls) == 2 and all(kw["headers"]["Cookie"] == "sessionid=abc; sid_tt=xyz" for _, kw in _calls))
 
 # ------------------------------------------------------------------ DeepSeek
 

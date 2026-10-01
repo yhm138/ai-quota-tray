@@ -73,6 +73,11 @@ jobs:
           dotnet build csharp/src/QuotaTray/QuotaTray.csproj -c Release -o dist/csharp
           if ($LASTEXITCODE -ne 0) { throw "C# build failed" }
 
+      - name: Test C# panel scroll clipping
+        run: |
+          powershell.exe -NoProfile -STA -File csharp/tests/Run-PanelScrollRegression.ps1 -AssemblyPath dist/csharp/QuotaTray.exe -OutputDirectory csharp/src/QuotaTray/bin/panel-scroll-regression
+          if ($LASTEXITCODE -ne 0) { throw "C# panel clipping regression failed" }
+
       - name: Build the single-file executable
         working-directory: python
         run: >

@@ -295,12 +295,16 @@ namespace QuotaTray.UI
 
         private static void Draw(Graphics g, bool draw, string text, Font font, Color color, int x, int y)
         {
-            if (draw && !string.IsNullOrEmpty(text)) TextRenderer.DrawText(g, text, font, new Point(x, y), color, One);
+            // TextRenderer uses GDI: Graphics.SetClip alone only clips GDI+
+            // shapes, so text must explicitly preserve the card viewport too.
+            if (draw && !string.IsNullOrEmpty(text)) TextRenderer.DrawText(g, text, font, new Point(x, y), color,
+                One | TextFormatFlags.PreserveGraphicsClipping);
         }
 
         private static void DrawWrapped(Graphics g, bool draw, string text, Font font, Color color, Rectangle r)
         {
-            if (draw && !string.IsNullOrEmpty(text)) TextRenderer.DrawText(g, text, font, r, color, Wrap);
+            if (draw && !string.IsNullOrEmpty(text)) TextRenderer.DrawText(g, text, font, r, color,
+                Wrap | TextFormatFlags.PreserveGraphicsClipping);
         }
 
         private static string Ellipsis(string text, int limit)
@@ -370,11 +374,21 @@ namespace QuotaTray.UI
                 if (draw)
                 {
                     var scroll = Math.Max(0, Math.Min(_scroll, _contentH - _visibleH));
-                    g.SetClip(_viewport);
-                    _clip = _viewport;
-                    Cards(g, true, width, y - scroll);
-                    _clip = null;
-                    g.ResetClip();
+                    var state = g.Save();
+                    var previousClip = _clip;
+                    try
+                    {
+                        // Intersect the viewport with any caller/paint clip,
+                        // and restore that clip before drawing fixed controls.
+                        g.SetClip(_viewport, System.Drawing.Drawing2D.CombineMode.Intersect);
+                        _clip = _viewport;
+                        Cards(g, true, width, y - scroll);
+                    }
+                    finally
+                    {
+                        _clip = previousClip;
+                        g.Restore(state);
+                    }
                     _thumb = Rectangle.Empty;
                     if (_contentH > _visibleH)
                     {
