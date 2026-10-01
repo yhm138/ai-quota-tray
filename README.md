@@ -1,9 +1,9 @@
 <h1 align="center">QuotaTray</h1>
 
 <p align="center">
-  A Windows 11 tray app that shows your <b>Claude</b>, <b>Codex</b> and
-  <b>Antigravity IDE</b> quota in one click.<br>
-  <sub>Windows 11 托盘小程序，一键查看 Claude / Codex / Antigravity IDE 的额度用量。</sub>
+  Every AI coding quota you pay for, one click away in the Windows 11 tray:<br>
+  <b>Claude</b> · <b>Codex</b> · <b>Antigravity</b> · <b>Gemini CLI</b> · <b>TRAE</b> · <b>Doubao</b> · <b>DeepSeek</b><br>
+  <sub>Windows 11 托盘小程序：一键查看 Claude、Codex、Antigravity、Gemini CLI、TRAE、豆包的额度，以及 DeepSeek API 余额。</sub>
 </p>
 
 <p align="center">
@@ -13,30 +13,45 @@
   <a href="../../releases/latest"><img alt="release" src="https://img.shields.io/github/v/release/yhm138/ai-quota-tray?include_prereleases"></a>
 </p>
 
-<p align="center">
-  <img src="docs/screenshot.png" alt="QuotaTray panel" width="380">
-</p>
+<div align="center">
+<table>
+  <tr>
+    <th>Subscriptions · 订阅制</th>
+    <th>Pay as you go · 按量计费</th>
+  </tr>
+  <tr>
+    <td align="center" valign="top">
+      <img src="docs/panel-subscriptions.png" alt="Subscriptions tab: Claude, Codex, Antigravity and Doubao cards with usage bars, reset times and plan details" width="320"><br>
+      <sub>Usage windows, reset times, plan and account details</sub>
+    </td>
+    <td align="center" valign="top">
+      <img src="docs/panel-payg.png" alt="Pay-as-you-go tab: the DeepSeek API balance with a Copy button for the key" width="320"><br>
+      <sub>DeepSeek API balance; the key is one click from the clipboard</sub>
+    </td>
+  </tr>
+</table>
+</div>
 
 <p align="center"><b>English</b> · <a href="#chinese">中文说明</a></p>
 
 > [!TIP]
-> **Just want it running? Grab the 176 KB C# edition.**
+> **Just want it running? Grab the 250 KB C# edition.**
 > **[`QuotaTray-<version>-csharp-windows-anycpu.exe`](../../releases/latest)** is a
-> **single 176 KB file: download it, double-click it, done.** No Python, no
+> **single 250 KB file: download it, double-click it, done.** No Python, no
 > installer, no runtime to download (it uses the .NET Framework built into
 > Windows 10/11), and it starts instantly. Same panel and data as the
 > Python edition. See [the C# edition](#the-c-edition).
 >
-> **只想直接用？下载 176 KB 的 C# 版。**
+> **只想直接用？下载 250 KB 的 C# 版。**
 > **[`QuotaTray-<版本>-csharp-windows-anycpu.exe`](../../releases/latest)**
-> **只有一个 176 KB 的文件：下载、双击，就能运行。** 不用装 Python，不用安装程序，也不用额外下载运行库（用 Windows 10/11 自带的 .NET Framework），秒开。面板和数据与 Python 版一致，见 [C# 版](#c-版)。
+> **只有一个 250 KB 的文件：下载、双击，就能运行。** 不用装 Python，不用安装程序，也不用额外下载运行库（用 Windows 10/11 自带的 .NET Framework），秒开。面板和数据与 Python 版一致，见 [C# 版](#c-版)。
 
 ---
 
 ## What it does
 
 It sits in the notification area, starts with Windows, and draws one usage bar
-per product. Click it and the panel (screenshot above) shows, per product:
+per product. Click it and the panel (screenshots above) shows, per product:
 
 - **Every quota window** with how much is used and how long until it resets:
   Claude's 5-hour and 7-day windows plus any extra limits the account has,
@@ -58,6 +73,16 @@ per product. Click it and the panel (screenshot above) shows, per product:
   granted, amber when it runs low. Each tab scrolls when its cards do not fit
   on the screen.
 
+| Product | What the card shows | Where it reads it from |
+|---|---|---|
+| **Claude** | 5-hour and 7-day windows, extra limits, plan, banked resets | Claude Code or Claude Desktop sign-in |
+| **Codex** | Usage windows, plan, credits, banked resets | Codex sign-in (`auth.json`, Windows and WSL) |
+| **Antigravity** | Prompt credits and per-model quota | The running IDE's local language server |
+| **Gemini CLI** <sub>off by default</sub> | Per-model quota and tier | `~/.gemini/oauth_creds.json` |
+| **TRAE (Trae CN)** | Plan and fast-request usage | TRAE's `storage.json` |
+| **Doubao** | Current-period and last-7-days windows, plan and its validity | Doubao Desktop or browser cookie, or a pasted `session_id` |
+| **DeepSeek** <sub>pay as you go</sub> | API balance: topped up and granted | The key OpenCode or DeepSeek Harness (dsh) keeps |
+
 No sign-in. It reads credentials that already exist on your machine from
 whichever tool put them there (including Claude Desktop's own login), and
 every product has **several fallback paths** so it keeps working when one of
@@ -74,7 +99,7 @@ editions with the same panel, data sources and settings; pick either one:
 |---|---|---|
 | `QuotaTray-<version>-windows-x64.exe` | Python | Single file, ~15 MB. The original; has every fallback path. Rename it to `QuotaTray.exe` if you like; updates keep whatever name it has. |
 | `QuotaTray-<version>-windows-x64-portable.zip` | Python | Unzip and run `QuotaTray.exe` inside. Starts faster and is less likely to trip antivirus. |
-| **`QuotaTray-<version>-csharp-windows-anycpu.exe`** | **C#** | **Recommended. One 176 KB file, double-click to run**, starts instantly. Uses the .NET Framework 4.8 built into Windows 10/11, runs natively on x64 and ARM64. See [the C# edition](#the-c-edition). |
+| **`QuotaTray-<version>-csharp-windows-anycpu.exe`** | **C#** | **Recommended. One 250 KB file, double-click to run**, starts instantly. Uses the .NET Framework 4.8 built into Windows 10/11, runs natively on x64 and ARM64. See [the C# edition](#the-c-edition). |
 | `QuotaTray-<version>-SHA256SUMS.txt` | | Verify what you downloaded (see below). |
 
 Only one QuotaTray runs at a time, whichever edition: both share the settings
@@ -126,11 +151,11 @@ winget install Python.Python.3.12
 | `csharp/` | The C# edition: `src/QuotaTray/` (the app) and `tests/QuotaTray.Tests/` |
 | `scripts/` | Maintainer scripts: publishing, releases, the workflow generator |
 | `update.ps1` | The stand-alone updater (stays at the root: older versions download it from there) |
-| `docs/` | The screenshot |
+| `docs/` | The README screenshots |
 
 ## The C# edition
 
-**A single 176 KB `.exe` you double-click to run.** The same app written in
+**A single 250 KB `.exe` you double-click to run.** The same app written in
 C# for .NET Framework 4.8, which ships with Windows 10 (1903+) and 11, so
 there is nothing to install and nothing to unpack: it starts instantly and
 uses far less memory than the ~15 MB Python build.
@@ -500,6 +525,16 @@ MIT — see [LICENSE](LICENSE).
 - **更多产品**：**Gemini CLI**（各模型额度和套餐档位）、**TRAE（Trae CN）**（套餐和 fast request 用量）、**豆包**桌面客户端（套餐和窗口额度用量）。
 - **两个标签页**：*Subscriptions*（订阅制：Claude、Codex、Antigravity、Gemini CLI、TRAE、豆包）和 *Pay as you go*（按量计费）。按量计费页显示 OpenCode 或 DeepSeek Harness（dsh）里保存的 **DeepSeek API Key 的余额**：总余额、充值部分和赠送部分，余额偏低时变黄。卡片太多、屏幕放不下时，每个标签页都可以滚动。
 
+| 产品 | 卡片显示 | 数据来源 |
+|---|---|---|
+| **Claude** | 5 小时和 7 天窗口、其他限额、套餐、可用的额度重置 | Claude Code 或 Claude Desktop 的登录 |
+| **Codex** | 用量窗口、套餐、积分、可用的额度重置 | Codex 的登录（`auth.json`，Windows 和 WSL） |
+| **Antigravity** | prompt 积分和各模型额度 | 正在运行的 IDE 的本地语言服务器 |
+| **Gemini CLI** <sub>默认关闭</sub> | 各模型额度和套餐档位 | `~/.gemini/oauth_creds.json` |
+| **TRAE（Trae CN）** | 套餐和 fast request 用量 | TRAE 的 `storage.json` |
+| **豆包** | 当前时段和近 7 天窗口、套餐及有效期 | 豆包桌面版或浏览器的 cookie，或手动填写的 `session_id` |
+| **DeepSeek** <sub>按量计费</sub> | API 余额：充值部分和赠送部分 | OpenCode 或 DeepSeek Harness（dsh）里保存的 Key |
+
 **不需要登录**。它读取你机器上各个工具已经写好的凭据（包括 Claude Desktop 自己的登录），而且每个产品都有**多条兜底路径**，某一条不通时自动换下一条。新版本在托盘菜单里一键安装。
 
 ## 安装
@@ -512,7 +547,7 @@ MIT — see [LICENSE](LICENSE).
 |---|---|---|
 | `QuotaTray-<版本>-windows-x64.exe` | Python | 单文件，约 15 MB，功能最全（所有兜底路径）。可以改名为 `QuotaTray.exe`，更新时会保留你的文件名 |
 | `QuotaTray-<版本>-windows-x64-portable.zip` | Python | 解压后运行里面的 `QuotaTray.exe`。启动更快，也更不容易被杀软误报 |
-| **`QuotaTray-<版本>-csharp-windows-anycpu.exe`** | **C#** | **推荐。单个 176 KB 文件，双击即可运行**，秒开。用 Windows 10/11 自带的 .NET Framework 4.8，x64 和 ARM64 都原生运行。见下方 [C# 版](#c-版) |
+| **`QuotaTray-<版本>-csharp-windows-anycpu.exe`** | **C#** | **推荐。单个 250 KB 文件，双击即可运行**，秒开。用 Windows 10/11 自带的 .NET Framework 4.8，x64 和 ARM64 都原生运行。见下方 [C# 版](#c-版) |
 | `QuotaTray-<版本>-SHA256SUMS.txt` | | 校验下载的文件（见下） |
 
 不管哪个版本，同一时间只会运行一个 QuotaTray：两个版本共用 `%APPDATA%\QuotaTray` 里的设置，启动其中一个会替换掉另一个。
@@ -552,11 +587,11 @@ winget install Python.Python.3.12
 | `csharp/` | C# 版：`src/QuotaTray/`（程序本体）和 `tests/QuotaTray.Tests/` |
 | `scripts/` | 维护者脚本：发布、打 Release、生成 workflow |
 | `update.ps1` | 独立更新脚本（留在根目录，旧版本从这个位置下载它） |
-| `docs/` | 截图 |
+| `docs/` | README 截图 |
 
 ## C# 版
 
-**单个 176 KB 的 `.exe`，双击即可运行。** 用 C# 重写的同一个程序，基于 Windows 10（1903+）/ 11 自带的 .NET Framework 4.8，所以什么都不用装、也不用解压：秒开，内存占用也比约 15 MB 的 Python 版小得多。
+**单个 250 KB 的 `.exe`，双击即可运行。** 用 C# 重写的同一个程序，基于 Windows 10（1903+）/ 11 自带的 .NET Framework 4.8，所以什么都不用装、也不用解压：秒开，内存占用也比约 15 MB 的 Python 版小得多。
 
 数据覆盖相同：Claude（Claude Code 登录，含 WSL；Claude Desktop 自己的登录）、Codex（实时用量接口及套餐、积分、重置，`codex app-server`，会话日志）、Antigravity；同样支持多账号翻页、重置提醒、一键应用内更新、诊断和开机自启。未包含的只有 Python 版作为最后兜底的 claude.ai cookie 路径和 Codex SQLite 扫描。
 
