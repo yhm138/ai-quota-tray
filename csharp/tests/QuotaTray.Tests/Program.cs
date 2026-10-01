@@ -505,6 +505,27 @@ namespace QuotaTray.Tests
             Check("config merge keeps defaults", cfg.RefreshSeconds == 60 && !Settings.Flag(cfg.Provider("codex"), "enabled", true)
                                                 && Settings.List(cfg.Provider("claude"), "order").Count == 4);
 
+            Console.WriteLine("--- shared credential reads ---");
+            var sdir = Path.Combine(Paths.AppDir, "shared-read");
+            Directory.CreateDirectory(sdir);
+            var sf = Path.Combine(sdir, "oauth_creds.json");
+            File.WriteAllText(sf, "{\"access_token\":\"abc\"}");
+            Check("io: reads a credential file", Json.ParseObject(Core.Io.ReadAllTextShared(sf))?.Str("access_token") == "abc");
+            File.WriteAllBytes(sf, new byte[] { 0xEF, 0xBB, 0xBF }.Concat(Encoding.UTF8.GetBytes("{\"x\":1}")).ToArray());
+            Check("io: strips a UTF-8 BOM", Json.ParseObject(Core.Io.ReadAllTextShared(sf))?.Num("x") == 1);
+            Check("io: missing file is null", Core.Io.ReadAllTextShared(Path.Combine(sdir, "nope.json")) == null);
+            // The crux of the fix: while QuotaTray holds the file open with our
+            // share mode, the owning CLI can still replace it (atomic rename).
+            using (new FileStream(sf, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+            {
+                var tmp = sf + ".tmp";
+                File.WriteAllText(tmp, "{\"x\":2}");
+                var replaced = false;
+                try { File.Replace(tmp, sf, null); replaced = true; }
+                catch (Exception) { try { File.Delete(tmp); } catch (Exception) { } }
+                Check("io: owner can replace the file while QuotaTray reads it", replaced);
+            }
+
             try { Directory.Delete(Paths.AppDir, true); } catch (Exception) { }
             Console.WriteLine($"\npassed {Pass.Count} / {Pass.Count + Fail.Count}");
             if (Fail.Count > 0) Console.WriteLine("failures: " + string.Join("; ", Fail));

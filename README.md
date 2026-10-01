@@ -263,6 +263,11 @@ usually current, and QuotaTray embeds no OAuth secret); a clearly expired
 token is reported so you can run `gemini` once. One page per Google account;
 tokens go to Google only.
 
+This card is **off by default**: Google deprecated Gemini CLI for individual
+Google accounts (sign-in now tells you to migrate to Antigravity), so its
+quota API fails for most accounts. Set `gemini.enabled` to `true` in the
+config if your account still works.
+
 ### TRAE (Trae CN)
 
 TRAE keeps its Cloud-IDE JWT in `%APPDATA%\Trae CN\User\globalStorage\storage.json`
@@ -608,6 +613,8 @@ Antigravity 内部跑一个语言服务器，启动参数里带 `--csrf_token`�
 ### Gemini CLI
 
 Gemini CLI 用 Google 账号登录，令牌存在 `~/.gemini/oauth_creds.json`（也支持 `GEMINI_CLI_HOME` 和各 WSL 发行版）。QuotaTray 直接用磁盘上的 access token，从 Google 的 Code Assist 接口（`cloudcode-pa.googleapis.com` 的 `loadCodeAssist`、`retrieveUserQuota`）读取套餐档位和各模型的剩余额度——和 CLI 自己调用的是同一批接口。它不自己刷新令牌（CLI 运行时会刷新，所以文件通常是新的；QuotaTray 也就不需要内置任何 OAuth 密钥）；令牌明显过期时会提示你运行一次 `gemini`。每个 Google 账号一页；令牌只发给 Google。
+
+这张卡片**默认隐藏**：Google 已对个人 Google 账号停用 Gemini CLI（登录时会提示迁移到 Antigravity），所以大多数账号的配额接口已经失效。如果你的账号还能用，把配置里的 `gemini.enabled` 设成 `true` 即可。
 
 ### TRAE（Trae CN）
 

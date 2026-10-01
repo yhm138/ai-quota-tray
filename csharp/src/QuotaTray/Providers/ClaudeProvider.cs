@@ -179,7 +179,7 @@ namespace QuotaTray.Providers
         public static Tuple<string, double?, string> TokenFromFile(string path)
         {
             JObj data;
-            try { data = Json.ParseObject(File.ReadAllText(path, Encoding.UTF8)); }
+            try { var _t = Io.ReadAllTextShared(path); data = _t != null ? Json.ParseObject(_t) : null; }
             catch (Exception) { return Tuple.Create<string, double?, string>(null, null, null); }
             if (data == null) return Tuple.Create<string, double?, string>(null, null, null);
             var node = data.Obj("claudeAiOauth") ?? data.Obj("oauth") ?? data;
@@ -641,7 +641,7 @@ namespace QuotaTray.Providers
         /// <summary>The OSCrypt key from Local State, unwrapped with DPAPI.</summary>
         public static byte[] MasterKey(string localState)
         {
-            var data = Json.ParseObject(File.ReadAllText(localState, Encoding.UTF8))
+            var data = Json.ParseObject(Io.ReadAllTextShared(localState) ?? "")
                        ?? throw new CryptoError("cannot read Local State");
             var encoded = data.Obj("os_crypt")?.Str("encrypted_key");
             if (string.IsNullOrEmpty(encoded)) throw new CryptoError("Local State has no os_crypt.encrypted_key");
@@ -673,7 +673,7 @@ namespace QuotaTray.Providers
                 var name = Path.GetFileName(root.TrimEnd('\\', '/'));
                 var cfg = Path.Combine(root, "config.json");
                 JObj data;
-                try { data = Json.ParseObject(File.ReadAllText(cfg, Encoding.UTF8)); }
+                try { var _c = Io.ReadAllTextShared(cfg); data = _c != null ? Json.ParseObject(_c) : null; }
                 catch (Exception) { data = null; }
                 if (data == null)
                 {

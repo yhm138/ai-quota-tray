@@ -542,7 +542,8 @@ namespace QuotaTray.Providers
                 try
                 {
                     if (!File.Exists(path)) continue;
-                    var tokens = Json.ParseObject(File.ReadAllText(path, Encoding.UTF8))?.Obj("tokens");
+                    var _t = Io.ReadAllTextShared(path);
+                    var tokens = _t != null ? Json.ParseObject(_t)?.Obj("tokens") : null;
                     if (tokens != null && tokens.Truthy("access_token")) return Tuple.Create(tokens, path);
                 }
                 catch (Exception) { }

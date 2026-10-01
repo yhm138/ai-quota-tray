@@ -160,9 +160,14 @@ def _pick(node, *paths):
 
 def read_storage_auth(storage_path: Path) -> tuple[str | None, str | None]:
     """(access token, email) from a storage.json, or (None, None)."""
+    from ..win.shareio import read_text as _read_shared
+
+    text = _read_shared(storage_path)
+    if text is None:
+        return None, None
     try:
-        root = json.loads(storage_path.read_text(encoding="utf-8", errors="replace"))
-    except (OSError, ValueError):
+        root = json.loads(text)
+    except ValueError:
         return None, None
     if not isinstance(root, dict):
         return None, None
