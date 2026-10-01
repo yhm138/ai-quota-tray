@@ -107,19 +107,18 @@ def parse_profile(payload: dict) -> tuple[str | None, str | None, list[InfoRow]]
     return account, plan, rows
 
 
-def _window_label(start_ms, end_ms, window_type) -> str:
-    """Name a window by its length: 5-hour, Daily, Weekly."""
-    try:
-        hours = (float(end_ms) - float(start_ms)) / 3_600_000.0
-    except (TypeError, ValueError):
-        hours = 0.0
-    if hours >= 100:
-        return "Weekly"
-    if hours >= 20:
-        return "Daily"
-    if hours >= 1:
-        return f"{int(round(hours))}-hour"
-    return {1: "5-hour", 2: "Weekly"}.get(window_type, "Window")
+# Doubao labels windows by window_type, not by duration: 1 is the current
+# rolling period (its length is not fixed, so it is not named in hours), 2 is
+# the last-7-days window. Enums beyond these stay generic until confirmed.
+_WINDOW_LABELS = {1: "Current period", 2: "Last 7 days"}
+
+
+def _window_label(window_type) -> str:
+    return _WINDOW_LABELS.get(window_type, "Usage window")
+
+
+def _positive(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
 
 
 def parse_overview(payload: dict) -> tuple[str | None, list[QuotaWindow], list[InfoRow]]:
@@ -152,11 +151,20 @@ def parse_overview(payload: dict) -> tuple[str | None, list[QuotaWindow], list[I
                     continue
                 pct = max(0.0, min(100.0, float(pct)))
                 wtype = wl.get("window_type")
-                detail = "<1% used" if wl.get("less_than_one_percent") and pct <= 0 else None
+                start, end = wl.get("start_time"), wl.get("end_time")
+                # start_time=end_time=0 is the "not started" sentinel (the
+                # period begins on first use), NOT an epoch of 1970.
+                started = _positive(start) or _positive(end)
+                if not started:
+                    detail = "not started"
+                elif wl.get("less_than_one_percent") and pct <= 0:
+                    detail = "<1% used"           # a true <1%, not an exact zero
+                else:
+                    detail = None
                 windows.append(QuotaWindow(
                     key=f"doubao-{gname}-{wtype}-{order}",
-                    label=_window_label(wl.get("start_time"), wl.get("end_time"), wtype),
-                    percent=pct, resets_at=parse_time(wl.get("end_time")),
+                    label=_window_label(wtype),
+                    percent=pct, resets_at=parse_time(end) if started else None,
                     detail=detail, order=order, exhausted=exhausted_all and pct >= 100,
                 ))
                 order += 1

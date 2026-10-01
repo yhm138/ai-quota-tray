@@ -96,15 +96,20 @@ namespace QuotaTray.Providers
             return Tuple.Create(account, plan, rows);
         }
 
-        private static string WindowLabel(object startMs, object endMs, double? windowType)
+        // Doubao labels windows by window_type, not duration: 1 is the current
+        // rolling period (length not fixed, so not named in hours), 2 is the
+        // last-7-days window. Other enums stay generic until confirmed.
+        private static string WindowLabel(double? windowType)
         {
-            var start = Json.AsNumber(startMs);
-            var end = Json.AsNumber(endMs);
-            var hours = (start != null && end != null) ? (end.Value - start.Value) / 3_600_000.0 : 0.0;
-            if (hours >= 100) return "Weekly";
-            if (hours >= 20) return "Daily";
-            if (hours >= 1) return ((int)Math.Round(hours)) + "-hour";
-            return windowType == 2 ? "Weekly" : "5-hour";
+            if (windowType == 1) return "Current period";
+            if (windowType == 2) return "Last 7 days";
+            return "Usage window";
+        }
+
+        private static bool Positive(object v)
+        {
+            var n = Json.AsNumber(v);
+            return n != null && n.Value > 0;
         }
 
         /// <summary>(plan, windows) from the subscription overview response.</summary>
@@ -135,10 +140,15 @@ namespace QuotaTray.Providers
                         var pct = Math.Max(0.0, Math.Min(100.0, pctNum.Value));
                         var wtype = wl.Num("window_type");
                         var lessThanOne = wl["less_than_one_percent"] is bool lb && lb;
-                        var detail = (lessThanOne && pct <= 0) ? "<1% used" : null;
+                        // start_time=end_time=0 is the "not started" sentinel (the
+                        // period begins on first use), NOT an epoch of 1970.
+                        var started = Positive(wl["start_time"]) || Positive(wl["end_time"]);
+                        string detail = !started ? "not started"
+                            : (lessThanOne && pct <= 0) ? "<1% used" : null;
                         windows.Add(new QuotaWindow($"doubao-{gname}-{wtype}-{order}",
-                            WindowLabel(wl["start_time"], wl["end_time"], wtype), pct,
-                            Time.Parse(wl["end_time"]), detail, order, exhaustedAll && pct >= 100));
+                            WindowLabel(wtype), pct,
+                            started ? Time.Parse(wl["end_time"]) : (DateTimeOffset?)null,
+                            detail, order, exhaustedAll && pct >= 100));
                         order++;
                     }
                 }

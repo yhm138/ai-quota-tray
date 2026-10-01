@@ -415,13 +415,16 @@ namespace QuotaTray.Tests
             var drem = DoubaoProvider.ParseProfile(J("{\"data\":{\"profile_brief\":{\"nickname\":\"x\"},\"benefit\":{\"remaining\":88}}}"));
             Check("doubao: a remaining count is shown if present", drem.Item3.Any(r => r.Label == "Remaining" && r.Value == "88"));
             // The subscription overview carries the plan and window-limit usage.
-            const string ovJson = "{\"code\":0,\"data\":{\"current_subscription\":{\"display\":{\"product_name\":\"\\u4e2a\\u4eba\\u8ba2\\u9605\",\"short_name\":\"\\u6807\\u51c6\\u5957\\u9910\"},\"sku_key\":\"doubao_personal_std\"},\"window_limit_section\":{\"usage_exhausted\":false,\"window_limit_groups\":[{\"feature_group\":\"general\",\"window_limits\":[{\"start_time\":1790802742609,\"end_time\":1790820742609,\"used_percent\":0,\"less_than_one_percent\":true,\"window_type\":1},{\"start_time\":1790457137809,\"end_time\":1791061937809,\"used_percent\":42,\"window_type\":2}]}]}}}";
+            // Mirrors the real capture: current period not started (0/0), last-7-days at <1%.
+            const string ovJson = "{\"code\":0,\"data\":{\"current_subscription\":{\"display\":{\"product_name\":\"\\u4e2a\\u4eba\\u8ba2\\u9605\",\"short_name\":\"\\u6807\\u51c6\\u5957\\u9910\"},\"sku_key\":\"doubao_personal_std\"},\"window_limit_section\":{\"usage_exhausted\":false,\"window_limit_groups\":[{\"feature_group\":\"general\",\"window_limits\":[{\"start_time\":0,\"end_time\":0,\"used_percent\":0,\"less_than_one_percent\":false,\"window_type\":1,\"item_type\":0},{\"start_time\":1790457137809,\"end_time\":1791061937809,\"used_percent\":0,\"less_than_one_percent\":true,\"window_type\":2,\"item_type\":0}]}]}}}";
             var dov = DoubaoProvider.ParseOverview(J(ovJson));
             Check("doubao: overview plan name", dov.Item1 == "\u6807\u51c6\u5957\u9910", dov.Item1);
-            Check("doubao: overview 5-hour and weekly windows",
-                string.Join(",", dov.Item2.Select(w => w.Label)) == "5-hour,Weekly", string.Join(",", dov.Item2.Select(w => w.Label)));
-            Check("doubao: overview used-percent",
-                string.Join(",", dov.Item2.Select(w => w.Percent)) == "0,42", string.Join(",", dov.Item2.Select(w => w.Percent)));
+            Check("doubao: windows labelled by type",
+                string.Join(",", dov.Item2.Select(w => w.Label)) == "Current period,Last 7 days", string.Join(",", dov.Item2.Select(w => w.Label)));
+            Check("doubao: not-started window has no 1970 reset",
+                dov.Item2[0].ResetsAt == null && dov.Item2[0].Detail == "not started", (dov.Item2[0].ResetsAt?.ToString() ?? "null") + "/" + dov.Item2[0].Detail);
+            Check("doubao: last-7-days <1% kept distinct from a true 0",
+                dov.Item2[1].Percent == 0 && dov.Item2[1].Detail == "<1% used" && dov.Item2[1].ResetsAt != null, dov.Item2[1].Detail);
             var seenDoubao = new List<string>();
             Http.Send = req =>
             {
@@ -437,9 +440,9 @@ namespace QuotaTray.Tests
             Check("doubao: sends the sessionid cookie", seenDoubao.Any(c => c.Contains("sessionid=sk-cookie")), string.Join("|", seenDoubao));
             Check("doubao: account and overview plan win", dbr.Account == "\u5c0f\u8c46" && dbr.Plan == "\u6807\u51c6\u5957\u9910" && dbr.Billing == "subscription", dbr.Plan);
             Check("doubao: window bars shown",
-                string.Join(",", dbr.SortedWindows().Select(w => w.Label)) == "5-hour,Weekly", string.Join(",", dbr.Windows.Select(w => w.Label)));
+                string.Join(",", dbr.SortedWindows().Select(w => w.Label)) == "Current period,Last 7 days", string.Join(",", dbr.Windows.Select(w => w.Label)));
             Check("doubao: survives the cache",
-                string.Join(",", ProviderResult.FromCache(Json.ParseObject(Json.Write(dbr.ToCache()))).Windows.Select(w => w.Label)) == "5-hour,Weekly");
+                string.Join(",", ProviderResult.FromCache(Json.ParseObject(Json.Write(dbr.ToCache()))).Windows.Select(w => w.Label)) == "Current period,Last 7 days");
             // If the overview call is rejected (web signing), the card still shows the account.
             Http.Send = req => req.Url == DoubaoProvider.ProfileUrl
                 ? new HttpReply(200, "{\"data\":{\"profile_brief\":{\"nickname\":\"\\u5c0f\\u8c46\",\"vip_type\":2}}}")

@@ -1250,22 +1250,33 @@ check("doubao: free account has no plan", acct2 == "Free User" and plan2 is None
 _, _, rows3 = doubao.parse_profile({"data": {"profile_brief": {"nickname": "x"}, "benefit": {"remaining": 88}}})
 check("doubao: a remaining count is shown if present", any(r.label == "Remaining" and r.value == "88" for r in rows3), rows3)
 
-# The subscription overview carries the plan and the window-limit usage (a
-# 5-hour window and a weekly one), shaped like the real response.
+# The subscription overview carries the plan and the window-limit usage. This
+# mirrors the real capture: a current period not yet started (start=end=0) and
+# a last-7-days window at <1%.
 _ov = {"code": 0, "data": {
     "current_subscription": {"display": {"product_name": "\u4e2a\u4eba\u8ba2\u9605", "short_name": "\u6807\u51c6\u5957\u9910"},
                              "sku_key": "doubao_personal_std"},
     "window_limit_section": {"usage_exhausted": False, "window_limit_groups": [
         {"feature_group": "general", "window_limits": [
-            {"start_time": 1790802742609, "end_time": 1790820742609, "used_percent": 0,
-             "less_than_one_percent": True, "window_type": 1},
-            {"start_time": 1790457137809, "end_time": 1791061937809, "used_percent": 42, "window_type": 2},
+            {"start_time": 0, "end_time": 0, "used_percent": 0,
+             "less_than_one_percent": False, "window_type": 1, "item_type": 0},
+            {"start_time": 1790457137809, "end_time": 1791061937809, "used_percent": 0,
+             "less_than_one_percent": True, "window_type": 2, "item_type": 0},
         ]}]}}}
 ov_plan, ov_windows, _ = doubao.parse_overview(_ov)
 check("doubao: overview plan name", ov_plan == "\u6807\u51c6\u5957\u9910", ov_plan)
-check("doubao: overview makes 5-hour and weekly windows",
-      [w.label for w in ov_windows] == ["5-hour", "Weekly"], [w.label for w in ov_windows])
-check("doubao: overview used-percent", [w.percent for w in ov_windows] == [0.0, 42.0], [w.percent for w in ov_windows])
+check("doubao: windows labelled by type (current period, last 7 days)",
+      [w.label for w in ov_windows] == ["Current period", "Last 7 days"], [w.label for w in ov_windows])
+check("doubao: not-started window has no 1970 reset", ov_windows[0].resets_at is None and ov_windows[0].detail == "not started",
+      (ov_windows[0].resets_at, ov_windows[0].detail))
+check("doubao: last-7-days <1% kept distinct from a true 0",
+      ov_windows[1].percent == 0.0 and ov_windows[1].detail == "<1% used" and ov_windows[1].resets_at is not None,
+      (ov_windows[1].percent, ov_windows[1].detail))
+# A busy window (percent > 0) shows no <1% note.
+_busy = doubao.parse_overview({"code": 0, "data": {"window_limit_section": {"window_limit_groups": [
+    {"feature_group": "general", "window_limits": [
+        {"start_time": 1790457137809, "end_time": 1791061937809, "used_percent": 42, "window_type": 2}]}]}}})[1]
+check("doubao: a used window shows its percent, no <1%", _busy[0].percent == 42.0 and _busy[0].detail is None, (_busy[0].percent, _busy[0].detail))
 
 
 def doubao_get(url, headers=None, **_k):
@@ -1286,10 +1297,10 @@ r = dp.fetch()
 check("doubao connects", r.ok and "overview" in r.source, r.status)
 check("doubao: account and overview plan win", r.account == "\u5c0f\u8c46" and r.plan == "\u6807\u51c6\u5957\u9910"
       and r.billing == "subscription", (r.account, r.plan))
-check("doubao: window bars shown", [w.label for w in r.sorted_windows()] == ["5-hour", "Weekly"],
+check("doubao: window bars shown", [w.label for w in r.sorted_windows()] == ["Current period", "Last 7 days"],
       [w.label for w in r.windows])
 check("doubao: survives the cache",
-      [w.label for w in ProviderResult.from_cache(json.loads(json.dumps(r.to_cache()))).windows] == ["5-hour", "Weekly"])
+      [w.label for w in ProviderResult.from_cache(json.loads(json.dumps(r.to_cache()))).windows] == ["Current period", "Last 7 days"])
 
 # If the overview call is rejected (web signing), the card still shows the account.
 doubao.session = lambda: fake_session(get=doubao_get, post=lambda *a, **k: FakeResp({"code": 1, "msg": "verify"}, 200))
