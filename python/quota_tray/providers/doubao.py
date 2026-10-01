@@ -37,6 +37,18 @@ OVERVIEW_PARAMS = {
     "samantha_web": "1", "web_platform": "browser", "use-olympus-account": "1",
 }
 APP_FOLDERS = ("Doubao", "doubao")
+# Doubao answers a stale/invalid login with HTTP 200 and this code, not a 401.
+LOGIN_INVALID_CODES = {710012001}
+
+
+def _login_invalid(payload) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    code = payload.get("code")
+    if code in (0, None):
+        return False
+    text = f"{payload.get('msg', '')} {payload.get('message', '')}".lower()
+    return code in LOGIN_INVALID_CODES or "login invalid" in text or "\u767b\u5f55" in text
 BROWSER_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
@@ -183,10 +195,15 @@ class DoubaoProvider(Provider):
                 continue
         return any(app_roots(folder) for folder in APP_FOLDERS)
 
-    def _session_key(self) -> tuple[str | None, list[str]]:
+    def _cookie_header(self) -> tuple[str | None, list[str]]:
+        """The Cookie header to send. From config (session_id) if set -- a bare
+        sessionid value or a whole "k=v; k=v" string -- else the full jar read
+        from the app/browser cookie store (Doubao validates more than the lone
+        sessionid, so every cookie for the host is sent, as the app does)."""
         manual = (self.settings.get("session_id") or "").strip()
         if manual:
-            return manual, ["using session_id from config.json"]
+            header = manual if "=" in manual else f"sessionid={manual}"
+            return header, ["using session_id from config.json"]
         if sys.platform != "win32":
             return None, ["reading the Doubao cookie is Windows-only"]
         from ..win.chromium_cookies import get_cookies
@@ -197,20 +214,20 @@ class DoubaoProvider(Provider):
             # The configured portable folder only needs searching once.
             jar, notes = get_cookies(folder, "%doubao.com", "sessionid", extra if i == 0 else None)
             all_notes += notes
-            key = jar.get("sessionid") or jar.get("session_id")
-            if key:
-                return key, all_notes
+            if jar.get("sessionid") or jar.get("session_id"):
+                header = "; ".join(f"{k}={v}" for k, v in jar.items() if v)
+                return header, all_notes
         return None, all_notes
 
     def collect(self, result: ProviderResult) -> None:
-        session_key, notes = self._session_key()
-        if not session_key:
+        cookie_header, notes = self._cookie_header()
+        if not cookie_header:
             result.attempts.append(SourceAttempt("Doubao login", False,
                                                  "; ".join(notes[-3:]) or "no Doubao sessionid cookie found"))
             result.status = "Doubao not detected" if not result.installed else "sign in to Doubao Desktop first"
             return
         headers = {
-            "Cookie": f"sessionid={session_key}",
+            "Cookie": cookie_header,
             "Accept": "application/json",
             "Referer": "https://www.doubao.com/chat/",
             "User-Agent": BROWSER_UA,
@@ -221,25 +238,29 @@ class DoubaoProvider(Provider):
             result.attempts.append(SourceAttempt("Doubao profile", False, f"request failed: {exc}"))
             result.status = "could not reach www.doubao.com"
             return
-        if resp.status_code in (401, 403):
+        try:
+            payload = resp.json()
+        except ValueError:
+            payload = None
+        # Doubao answers an invalid/expired login with HTTP 200 and an error
+        # code, not a 401, so that is checked before anything else.
+        if resp.status_code in (401, 403) or _login_invalid(payload):
             result.attempts.append(SourceAttempt("Doubao profile", False,
-                f"session cookie rejected (HTTP {resp.status_code}); open Doubao Desktop to refresh it"))
-            result.status = "Doubao login expired (open the app)"
+                "login rejected (expired or incomplete cookie)"))
+            result.status = "Doubao login expired; re-sign in, or paste a fresh session_id"
             return
         if resp.status_code >= 400:
             result.attempts.append(SourceAttempt("Doubao profile", False, f"HTTP {resp.status_code}: {resp.text[:160]}"))
             result.status = f"Doubao profile HTTP {resp.status_code}"
             return
-        try:
-            payload = resp.json()
-        except ValueError:
+        if payload is None:
             result.attempts.append(SourceAttempt("Doubao profile", False, "response was not JSON (a login page?)"))
             result.status = "Doubao returned no profile (open the app and sign in)"
             return
         account, plan, rows = parse_profile(payload if isinstance(payload, dict) else {})
         # The subscription overview adds the plan name and the window-limit
         # usage; it is best effort (Doubao's web signing may reject our call).
-        ov_plan, windows = self._overview(session_key, result)
+        ov_plan, windows = self._overview(cookie_header, result)
         plan = ov_plan or plan
         if not account and not plan and not windows:
             result.attempts.append(SourceAttempt("Doubao profile", False, f"no account in response: {str(payload)[:160]}"))
@@ -259,10 +280,10 @@ class DoubaoProvider(Provider):
         result.data_time = now_utc()
         result.attempts.append(SourceAttempt("Doubao profile", True, account or plan or "signed in"))
 
-    def _overview(self, session_key: str, result: ProviderResult) -> tuple[str | None, list[QuotaWindow]]:
+    def _overview(self, cookie_header: str, result: ProviderResult) -> tuple[str | None, list[QuotaWindow]]:
         """Plan and window-limit usage, best effort. Never raises."""
         headers = {
-            "Cookie": f"sessionid={session_key}",
+            "Cookie": cookie_header,
             "Accept": "application/json, text/plain, */*",
             "Content-Type": "application/json",
             "agw-js-conv": "str",

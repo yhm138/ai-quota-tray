@@ -298,7 +298,9 @@ the card still shows the account and plan.
 - **Card can't read the cookie?** Recent Doubao *and browser* builds encrypt
   cookies with App-Bound encryption, which QuotaTray cannot decrypt from
   outside. Copy the `sessionid` value and paste it into `doubao.session_id` in
-  config.json.
+  config.json. `session_id` also accepts a whole `name=value; name=value`
+  Cookie string, so if a lone `sessionid` is rejected you can paste the entire
+  Cookie header from a logged-in `www.doubao.com` request.
 
 ### DeepSeek (pay as you go)
 
@@ -638,7 +640,7 @@ TRAE 把它的 Cloud-IDE JWT 存在 `%APPDATA%\Trae CN\User\globalStorage\storag
 
 - **便携版（Portable）？** 在 config.json 里把 `doubao.data_dir` 设成存放 cookie 库的文件夹（便携版安装目录，或其下的 `User Data` 子目录）。
 - **想用浏览器而不是客户端？** 把 `doubao.scan_browsers` 设成 `true`，QuotaTray 也会从 Edge、Chrome、Brave、Chromium、Vivaldi、Opera（所有 profile）里读 `doubao.com` 的 cookie。默认关闭。
-- **读不到 cookie？** 新版豆包**和浏览器**都用 App-Bound 加密 cookie，QuotaTray 无法从外部解密。把 `sessionid` 值复制出来，填到 config.json 的 `doubao.session_id` 即可。
+- **读不到 cookie？** 新版豆包**和浏览器**都用 App-Bound 加密 cookie，QuotaTray 无法从外部解密。把 `sessionid` 值复制出来，填到 config.json 的 `doubao.session_id` 即可。`session_id` 也支持整段 `name=value; name=value` 的 Cookie 字符串——如果单独的 `sessionid` 被拒，可以把已登录的 `www.doubao.com` 请求里的整个 Cookie 头粘进去。
 
 ### DeepSeek（按量计费）
 
