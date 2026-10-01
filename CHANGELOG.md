@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.8.2
+
+- **Doubao windows read correctly off a full capture of the quota page.**
+  Windows are now named by their kind -- *Current period* and *Last 7 days* --
+  rather than guessed from their length. A period that has not started yet
+  (Doubao sends `start_time = end_time = 0` until first use) shows "not
+  started" with no reset time, instead of a 1970 date. A window Doubao marks
+  `less_than_one_percent` shows "<1% used" and is kept distinct from a true
+  0%. Reset time is taken from the window's `end_time` (shown in your local
+  time)
+
 ## v1.8.1
 
 - **Doubao: a clear message when the login is stale, and a more complete
