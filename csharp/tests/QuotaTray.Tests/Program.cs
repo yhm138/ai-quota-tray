@@ -372,6 +372,20 @@ namespace QuotaTray.Tests
                     Check("sqlite: walks interior b-tree pages (62 rows)", rows == 62, rows.ToString());
                 }
             }
+            // Portable install: an explicit data_dir whose cookie store is laid
+            // out the browser way (User Data/Default/Network/Cookies).
+            {
+                var portable = Path.Combine(Path.GetTempPath(), "qt-portable-" + Guid.NewGuid().ToString("N"));
+                var pdir = Path.Combine(portable, "User Data", "Default", "Network");
+                Directory.CreateDirectory(pdir);
+                File.WriteAllText(Path.Combine(pdir, "Cookies"), "x");
+                var proots = Proc.AppRoots("Doubao", new[] { portable });
+                Check("portable folder discovered via extra", proots.Contains(Path.Combine(portable, "User Data")), string.Join("|", proots));
+                var pdbs = ChromiumCookies.FindCookieDbs(Path.Combine(portable, "User Data"));
+                Check("portable Default/ cookie DB found", pdbs.Any(p => p.EndsWith(Path.Combine("Default", "Network", "Cookies"))), string.Join("|", pdbs));
+                var pcfg = new Config(J("{\"providers\":{\"doubao\":{\"data_dir\":\"" + portable.Replace("\\", "\\\\") + "\"}}}"));
+                Check("doubao detects a portable data_dir", new DoubaoProvider(pcfg).Detect());
+            }
 
             var dprof = DoubaoProvider.ParseProfile(J("{\"data\":{\"profile_brief\":{\"nickname\":\"\\u5c0f\\u8c46\",\"user_name\":\"doubao_user\",\"id\":42,\"vip_type\":2}}}"));
             Check("doubao: account and plan from profile", dprof.Item1 == "\u5c0f\u8c46" && dprof.Item2 == "Pro", dprof.Item1 + "/" + dprof.Item2);
@@ -379,20 +393,38 @@ namespace QuotaTray.Tests
             Check("doubao: free account has no plan", dfree.Item1 == "Free User" && dfree.Item2 == null, dfree.Item1 + "/" + (dfree.Item2 ?? "null"));
             var drem = DoubaoProvider.ParseProfile(J("{\"data\":{\"profile_brief\":{\"nickname\":\"x\"},\"benefit\":{\"remaining\":88}}}"));
             Check("doubao: a remaining count is shown if present", drem.Item3.Any(r => r.Label == "Remaining" && r.Value == "88"));
+            // The subscription overview carries the plan and window-limit usage.
+            const string ovJson = "{\"code\":0,\"data\":{\"current_subscription\":{\"display\":{\"product_name\":\"\\u4e2a\\u4eba\\u8ba2\\u9605\",\"short_name\":\"\\u6807\\u51c6\\u5957\\u9910\"},\"sku_key\":\"doubao_personal_std\"},\"window_limit_section\":{\"usage_exhausted\":false,\"window_limit_groups\":[{\"feature_group\":\"general\",\"window_limits\":[{\"start_time\":1790802742609,\"end_time\":1790820742609,\"used_percent\":0,\"less_than_one_percent\":true,\"window_type\":1},{\"start_time\":1790457137809,\"end_time\":1791061937809,\"used_percent\":42,\"window_type\":2}]}]}}}";
+            var dov = DoubaoProvider.ParseOverview(J(ovJson));
+            Check("doubao: overview plan name", dov.Item1 == "\u6807\u51c6\u5957\u9910", dov.Item1);
+            Check("doubao: overview 5-hour and weekly windows",
+                string.Join(",", dov.Item2.Select(w => w.Label)) == "5-hour,Weekly", string.Join(",", dov.Item2.Select(w => w.Label)));
+            Check("doubao: overview used-percent",
+                string.Join(",", dov.Item2.Select(w => w.Percent)) == "0,42", string.Join(",", dov.Item2.Select(w => w.Percent)));
             var seenDoubao = new List<string>();
             Http.Send = req =>
             {
                 seenDoubao.Add(req.Headers.TryGetValue("Cookie", out var ck) ? ck : "");
                 if (req.Url == DoubaoProvider.ProfileUrl)
                     return new HttpReply(200, "{\"data\":{\"profile_brief\":{\"nickname\":\"\\u5c0f\\u8c46\",\"vip_type\":2}}}");
+                if (req.Url.StartsWith(DoubaoProvider.OverviewUrl)) return new HttpReply(200, ovJson);
                 return new HttpReply(404, "{}");
             };
             var dbp = new DoubaoProvider(new Config()) { SessionOverride = () => Tuple.Create("sk-cookie", new List<string>()) };
             var dbr = dbp.Fetch();
-            Check("doubao connects", dbr.Ok && dbr.Source == "www.doubao.com/alice/profile/self", dbr.Status);
+            Check("doubao connects", dbr.Ok && dbr.Source.Contains("overview"), dbr.Status);
             Check("doubao: sends the sessionid cookie", seenDoubao.Any(c => c.Contains("sessionid=sk-cookie")), string.Join("|", seenDoubao));
-            Check("doubao: account, plan, subscription tab", dbr.Account == "\u5c0f\u8c46" && dbr.Plan == "Pro" && dbr.Billing == "subscription");
-            Check("doubao: survives the cache", ProviderResult.FromCache(Json.ParseObject(Json.Write(dbr.ToCache()))).Plan == "Pro");
+            Check("doubao: account and overview plan win", dbr.Account == "\u5c0f\u8c46" && dbr.Plan == "\u6807\u51c6\u5957\u9910" && dbr.Billing == "subscription", dbr.Plan);
+            Check("doubao: window bars shown",
+                string.Join(",", dbr.SortedWindows().Select(w => w.Label)) == "5-hour,Weekly", string.Join(",", dbr.Windows.Select(w => w.Label)));
+            Check("doubao: survives the cache",
+                string.Join(",", ProviderResult.FromCache(Json.ParseObject(Json.Write(dbr.ToCache()))).Windows.Select(w => w.Label)) == "5-hour,Weekly");
+            // If the overview call is rejected (web signing), the card still shows the account.
+            Http.Send = req => req.Url == DoubaoProvider.ProfileUrl
+                ? new HttpReply(200, "{\"data\":{\"profile_brief\":{\"nickname\":\"\\u5c0f\\u8c46\",\"vip_type\":2}}}")
+                : new HttpReply(200, "{\"code\":1,\"msg\":\"verify\"}");
+            var dbr2 = new DoubaoProvider(new Config()) { SessionOverride = () => Tuple.Create("sk-cookie", new List<string>()) }.Fetch();
+            Check("doubao: survives an overview rejection", dbr2.Ok && dbr2.Account == "\u5c0f\u8c46" && dbr2.Windows.Count == 0, dbr2.Status);
             Http.Send = req => new HttpReply(401, "<html>login</html>");
             var d401 = new DoubaoProvider(new Config()) { SessionOverride = () => Tuple.Create("expired", new List<string>()) }.Fetch();
             Check("doubao: expired login explained", !d401.Ok && d401.Status.ToLowerInvariant().Contains("expired"), d401.Status);

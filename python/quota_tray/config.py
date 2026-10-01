@@ -96,6 +96,8 @@ DEFAULTS: dict[str, Any] = {
         "doubao": {
             "enabled": True,
             "session_id": "",            # manual fallback: a doubao.com sessionid cookie
+            "data_dir": "",              # portable install: the folder holding the app's
+                                         # cookie store (e.g. D:\\Doubao or its "User Data")
         },
         "deepseek": {
             "enabled": True,

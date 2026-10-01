@@ -431,6 +431,30 @@ jar = cc.read_cookies(db, "%claude.ai", key)
 check("sessionKey read and hash stripped", jar.get("sessionKey") == "sk-ant-1", jar)
 check("plain cookies read too", jar.get("lastActiveOrg") == "org-9", jar)
 
+# Portable install: the app folder is given explicitly (config data_dir) and the
+# cookie store sits the browser way, under "User Data/Default".
+portable = Path(tempfile.mkdtemp())
+pdef = portable / "User Data" / "Default" / "Network"
+pdef.mkdir(parents=True)
+pdb = pdef / "Cookies"
+pconn = sqlite3.connect(pdb)
+pconn.execute("CREATE TABLE meta (key TEXT, value TEXT)")
+pconn.execute("INSERT INTO meta VALUES ('version', '24')")
+pconn.execute("CREATE TABLE cookies (host_key TEXT, name TEXT, value TEXT, "
+              "encrypted_value BLOB, expires_utc INTEGER)")
+pconn.execute("INSERT INTO cookies VALUES ('.doubao.com', 'sessionid', 'portable-sid', x'', 1)")
+pconn.commit()
+pconn.close()
+proots = cc.app_roots("Doubao", [str(portable)])
+check("portable folder discovered via extra", (portable / "User Data") in proots, proots)
+check("portable Default/ cookie DB found", pdb in cc.find_cookie_dbs(portable / "User Data"),
+      cc.find_cookie_dbs(portable / "User Data"))
+pjar, _ = cc.get_cookies("Doubao", "%doubao.com", "sessionid", [str(portable)])
+check("portable sessionid read", pjar.get("sessionid") == "portable-sid", pjar)
+from quota_tray.providers import doubao as _doubao_mod              # noqa: E402
+check("doubao detects a portable data_dir",
+      _doubao_mod.DoubaoProvider(Config({"providers": {"doubao": {"data_dir": str(portable)}}})).detect())
+
 # ------------------------------------------------------------------ updater
 
 print("\n--- updater ---")
@@ -1197,6 +1221,23 @@ check("doubao: free account has no plan", acct2 == "Free User" and plan2 is None
 _, _, rows3 = doubao.parse_profile({"data": {"profile_brief": {"nickname": "x"}, "benefit": {"remaining": 88}}})
 check("doubao: a remaining count is shown if present", any(r.label == "Remaining" and r.value == "88" for r in rows3), rows3)
 
+# The subscription overview carries the plan and the window-limit usage (a
+# 5-hour window and a weekly one), shaped like the real response.
+_ov = {"code": 0, "data": {
+    "current_subscription": {"display": {"product_name": "\u4e2a\u4eba\u8ba2\u9605", "short_name": "\u6807\u51c6\u5957\u9910"},
+                             "sku_key": "doubao_personal_std"},
+    "window_limit_section": {"usage_exhausted": False, "window_limit_groups": [
+        {"feature_group": "general", "window_limits": [
+            {"start_time": 1790802742609, "end_time": 1790820742609, "used_percent": 0,
+             "less_than_one_percent": True, "window_type": 1},
+            {"start_time": 1790457137809, "end_time": 1791061937809, "used_percent": 42, "window_type": 2},
+        ]}]}}}
+ov_plan, ov_windows, _ = doubao.parse_overview(_ov)
+check("doubao: overview plan name", ov_plan == "\u6807\u51c6\u5957\u9910", ov_plan)
+check("doubao: overview makes 5-hour and weekly windows",
+      [w.label for w in ov_windows] == ["5-hour", "Weekly"], [w.label for w in ov_windows])
+check("doubao: overview used-percent", [w.percent for w in ov_windows] == [0.0, 42.0], [w.percent for w in ov_windows])
+
 
 def doubao_get(url, headers=None, **_k):
     check("doubao: sends the sessionid cookie", "sessionid=sk-cookie" in (headers or {}).get("Cookie", ""),
@@ -1204,16 +1245,29 @@ def doubao_get(url, headers=None, **_k):
     return FakeResp({"data": {"profile_brief": {"nickname": "\u5c0f\u8c46", "vip_type": 2}}})
 
 
-doubao.session = lambda: fake_session(get=doubao_get)
+def doubao_post(url, headers=None, **_k):
+    check("doubao: overview is a signed-str POST", (headers or {}).get("agw-js-conv") == "str", headers)
+    return FakeResp(_ov)
+
+
+doubao.session = lambda: fake_session(get=doubao_get, post=doubao_post)
 dp = doubao.DoubaoProvider(Config({"providers": {"doubao": {"session_id": "sk-cookie"}}}))
 dp.detect = lambda: True
 r = dp.fetch()
-check("doubao connects", r.ok and r.source == "www.doubao.com/alice/profile/self", r.status)
-check("doubao: account, plan, subscription tab", r.account == "\u5c0f\u8c46" and r.plan == "Pro"
+check("doubao connects", r.ok and "overview" in r.source, r.status)
+check("doubao: account and overview plan win", r.account == "\u5c0f\u8c46" and r.plan == "\u6807\u51c6\u5957\u9910"
       and r.billing == "subscription", (r.account, r.plan))
-check("doubao: says usage is in the app", "config" not in r.status.lower() and "central" not in r.status.lower(),
-      r.status)
-check("doubao: survives the cache", ProviderResult.from_cache(json.loads(json.dumps(r.to_cache()))).plan == "Pro")
+check("doubao: window bars shown", [w.label for w in r.sorted_windows()] == ["5-hour", "Weekly"],
+      [w.label for w in r.windows])
+check("doubao: survives the cache",
+      [w.label for w in ProviderResult.from_cache(json.loads(json.dumps(r.to_cache()))).windows] == ["5-hour", "Weekly"])
+
+# If the overview call is rejected (web signing), the card still shows the account.
+doubao.session = lambda: fake_session(get=doubao_get, post=lambda *a, **k: FakeResp({"code": 1, "msg": "verify"}, 200))
+dp2 = doubao.DoubaoProvider(Config({"providers": {"doubao": {"session_id": "sk-cookie"}}}))
+dp2.detect = lambda: True
+r2 = dp2.fetch()
+check("doubao: survives an overview rejection", r2.ok and r2.account == "\u5c0f\u8c46" and not r2.windows, r2.status)
 
 
 def doubao_401(url, headers=None, **_k):

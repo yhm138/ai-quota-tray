@@ -1,5 +1,22 @@
 # Changelog
 
+## v1.7.0
+
+- **Doubao now shows real usage bars.** The card reads Doubao's subscription
+  *overview* (the data behind the app's quota centre) and shows the
+  window-limit usage — a 5-hour window and a weekly one, the same shape as
+  Claude's — plus the plan name (e.g. standard / pro). It is best effort: if
+  Doubao's web signing rejects the call, the card still shows the account and
+  plan as before
+- **Portable Doubao installs are supported.** Set `doubao.data_dir` in the
+  config to the folder that holds the app's cookie store (the portable
+  install folder, or its `User Data` subfolder) and QuotaTray will read the
+  `sessionid` from there. QuotaTray also now looks for a browser-style
+  `Default/` profile layout under any app data dir
+- Note: recent Doubao builds encrypt their cookie with App-Bound encryption,
+  which QuotaTray cannot decrypt; if the card says it can't read the cookie,
+  paste the `sessionid` value into `doubao.session_id` in the config
+
 ## v1.6.1
 
 - **QuotaTray no longer blocks `gemini` (or any CLI) on startup.** The

@@ -26,8 +26,17 @@ class CookieError(RuntimeError):
 # ------------------------------------------------------------------ discovery
 
 
-def app_roots(app_folder: str) -> list[Path]:
+def app_roots(app_folder: str, extra: list | None = None) -> list[Path]:
     roots: list[Path] = []
+    # Explicit folders first (a portable install the user pointed us at). The
+    # cookie store may sit in the folder itself or in a "User Data" subdir.
+    for raw in extra or []:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        p = Path(text)
+        roots.append(p)
+        roots.append(p / "User Data")
     for env in ("APPDATA", "LOCALAPPDATA"):
         base = os.environ.get(env)
         if base:
@@ -45,14 +54,31 @@ def app_roots(app_folder: str) -> list[Path]:
     if sys.platform == "darwin":
         roots.append(Path.home() / "Library" / "Application Support" / app_folder)
     roots.append(Path.home() / f".config/{app_folder}")
-    return [r for r in roots if r.is_dir()]
+    out: list[Path] = []
+    seen: set[str] = set()
+    for r in roots:
+        try:
+            if not r.is_dir():
+                continue
+        except OSError:
+            continue
+        key = os.path.normcase(str(r))
+        if key not in seen:
+            seen.add(key)
+            out.append(r)
+    return out
 
 
 def find_cookie_dbs(root: Path, limit: int = 8) -> list[Path]:
     """Find every Cookies file under the app data dir (including partitions),
     newest first."""
     found: list[Path] = []
-    candidates = [root / "Network" / "Cookies", root / "Cookies"]
+    candidates = [
+        root / "Network" / "Cookies", root / "Cookies",
+        # A portable Chromium build may lay out its profile the browser way,
+        # with the cookie store under a "Default" profile folder.
+        root / "Default" / "Network" / "Cookies", root / "Default" / "Cookies",
+    ]
     # Session partitions (webviews) keep their own cookie jars. A full rglob
     # over the app dir is avoided: Claude Desktop keeps large VM bundles there.
     for pattern in ("Partitions/*/Network/Cookies", "Partitions/*/Cookies"):
@@ -245,18 +271,20 @@ def read_cookies(db_path: Path, host_like: str, key: bytes | None) -> dict[str, 
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
-def get_cookie(app_folder: str, host_like: str, name: str) -> tuple[str | None, list[str]]:
+def get_cookie(
+    app_folder: str, host_like: str, name: str, extra_roots: list | None = None
+) -> tuple[str | None, list[str]]:
     """Look for one cookie inside an Electron app. Returns (value, diagnostics)."""
-    cookies, notes = get_cookies(app_folder, host_like, name)
+    cookies, notes = get_cookies(app_folder, host_like, name, extra_roots)
     return cookies.get(name), notes
 
 
 def get_cookies(
-    app_folder: str, host_like: str, required: str
+    app_folder: str, host_like: str, required: str, extra_roots: list | None = None
 ) -> tuple[dict[str, str], list[str]]:
     """Return every cookie for host_like from the first jar that has `required`."""
     notes: list[str] = []
-    roots = app_roots(app_folder)
+    roots = app_roots(app_folder, extra_roots)
     if not roots:
         notes.append(f"no data directory found for {app_folder}")
         return {}, notes

@@ -113,9 +113,19 @@ namespace QuotaTray.Win
         }
 
         /// <summary>Electron app data folders, including Microsoft Store (MSIX) ones.</summary>
-        public static List<string> AppRoots(string appFolder)
+        public static List<string> AppRoots(string appFolder, IEnumerable<string> extra = null)
         {
             var roots = new List<string>();
+            // Explicit folders first (a portable install the user pointed us at).
+            // The cookie store may be in the folder itself or a "User Data" subdir.
+            if (extra != null)
+                foreach (var raw in extra)
+                {
+                    var text = (raw ?? "").Trim();
+                    if (text.Length == 0) continue;
+                    roots.Add(text);
+                    roots.Add(Path.Combine(text, "User Data"));
+                }
             var appdata = Environment.GetEnvironmentVariable("APPDATA");
             var local = Environment.GetEnvironmentVariable("LOCALAPPDATA");
             if (!string.IsNullOrEmpty(appdata)) roots.Add(Path.Combine(appdata, appFolder));
@@ -133,7 +143,8 @@ namespace QuotaTray.Win
                 catch (Exception) { }
             }
             roots.Add(Path.Combine(Paths.Home, ".config", appFolder));
-            return roots.Where(SafeDirExists).ToList();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            return roots.Where(SafeDirExists).Where(r => seen.Add(Path.GetFullPath(r))).ToList();
         }
 
         public static bool SafeDirExists(string p)
