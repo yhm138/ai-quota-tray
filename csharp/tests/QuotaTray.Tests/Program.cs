@@ -191,7 +191,8 @@ namespace QuotaTray.Tests
             var rc = codex.Fetch();
             Check("codex e2e connects", rc.Ok && rc.Account == "c@x.com" && rc.Windows.Count == 2, rc.Status);
             Check("codex e2e: count survives a failed list", rc.ResetsAvailable == 2);
-            Check("codex e2e: failure in diagnostics", rc.Attempts.Any(a => a.Name == "Codex account details" && a.Detail.Contains("HTTP 403")));
+            // Existing local Codex homes add an account label to attempt names.
+            Check("codex e2e: failure in diagnostics", rc.Attempts.Any(a => a.Name.EndsWith("Codex account details", StringComparison.Ordinal) && a.Detail.Contains("HTTP 403")));
 
             // jsonl fallback reads the newest record, relative to its timestamp
             var home = Path.Combine(Paths.AppDir, "codex-home");
@@ -425,16 +426,92 @@ namespace QuotaTray.Tests
                 dov.Item2[0].ResetsAt == null && dov.Item2[0].Detail == "not started", (dov.Item2[0].ResetsAt?.ToString() ?? "null") + "/" + dov.Item2[0].Detail);
             Check("doubao: last-7-days <1% kept distinct from a true 0",
                 dov.Item2[1].Percent == 0 && dov.Item2[1].Detail == "<1% used" && dov.Item2[1].ResetsAt != null, dov.Item2[1].Detail);
-            Check("doubao: benefit end becomes a Bonus-until row",
-                dov.Item3.Any(r => r.Label == "Bonus until" && r.Value == "2026-10-19"), string.Join(",", dov.Item3.Select(r => r.Label + "=" + r.Value)));
+            string DoubaoLocalMinute(long epochMillis) => DateTimeOffset.FromUnixTimeMilliseconds(epochMillis).ToLocalTime()
+                .ToString("yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture);
+            Check("doubao: separate subscription and benefit expiry retain local minutes",
+                dov.Item3.Any(r => r.Label == "Bonus until" && r.Value == DoubaoLocalMinute(1792393764820))
+                && dov.Item3.Any(r => r.Label == "Plan until" && r.Value == DoubaoLocalMinute(1794303044488)),
+                string.Join(",", dov.Item3.Select(r => r.Label + "=" + r.Value)));
             var dpu = DoubaoProvider.ParseOverview(J("{\"code\":0,\"data\":{\"current_subscription\":{\"end_time\":1794303044488}}}")).Item3;
             Check("doubao: plain subscription end becomes a Plan-until row",
-                dpu.Any(r => r.Label == "Plan until" && r.Value == "2026-11-10"), string.Join(",", dpu.Select(r => r.Label + "=" + r.Value)));
+                dpu.Any(r => r.Label == "Plan until" && r.Value == DoubaoLocalMinute(1794303044488)), string.Join(",", dpu.Select(r => r.Label + "=" + r.Value)));
+
+            Tuple<string, List<QuotaWindow>, List<InfoRow>> DoubaoData(string dataJson) =>
+                DoubaoProvider.ParseOverview(J("{\"code\":0,\"data\":" + dataJson + "}"));
+            var activeOverview = J(ovJson);
+            activeOverview.Obj("data")["member_info"] = J(@"{""hasActiveSubscription"":true}");
+            var activeRows = DoubaoProvider.ParseOverview(activeOverview).Item3;
+            Check("doubao: active membership is explicit and green", activeRows.Any(r => r.Label == "Plan status" && r.Value == "Active" && r.Tone == "good"));
+            Check("doubao: detail rows have a stable order", string.Join(",", activeRows.Select(r => r.Label)) == "Plan status,Plan until,Bonus until,Quota group");
+            var inactiveRows = DoubaoData(@"{""member_info"":{""hasActiveSubscription"":false},""current_subscription"":{""trial_info"":{""is_trialing"":true},""is_gift"":true}}").Item3;
+            Check("doubao: inactive membership warns without trial or gift suffix", inactiveRows.Count == 1
+                && inactiveRows[0].Label == "Plan status" && inactiveRows[0].Value == "Inactive" && inactiveRows[0].Tone == "warn");
+            var trialRows = DoubaoData(@"{""member_info"":{""hasActiveSubscription"":true},""current_subscription"":{""trial_info"":{""is_trialing"":true},""is_gift"":true}}").Item3;
+            Check("doubao: explicit active trial takes priority over gift", trialRows.Single().Value == "Active (trial)");
+            var giftRows = DoubaoData(@"{""member_info"":{""hasActiveSubscription"":true},""current_subscription"":{""is_gift"":true}}").Item3;
+            Check("doubao: explicit active gift is labelled", giftRows.Single().Value == "Active (gift)");
+            var unknownFlags = new[]
+            {
+                @"{""member_info"":{""status"":1},""current_subscription"":{""status"":1}}",
+                @"{""member_info"":{""hasActiveSubscription"":1}}",
+                @"{""member_info"":{""hasActiveSubscription"":""true""}}",
+                @"{""member_info"":{""hasActiveSubscription"":null}}",
+            };
+            Check("doubao: missing or nonboolean membership does not guess status", unknownFlags.All(x =>
+                !DoubaoData(x).Item3.Any(r => r.Label == "Plan status")));
+            var untypedFlags = DoubaoData(@"{""member_info"":{""hasActiveSubscription"":true},""current_subscription"":{""trial_info"":{""is_trialing"":1},""is_gift"":""true""}}").Item3;
+            Check("doubao: trial and gift also require boolean flags", untypedFlags.Single().Value == "Active");
+            var bonusOnlyRows = DoubaoData(@"{""campaign_benefit_info"":{""benefit_end_time"":1792393764820}}").Item3;
+            Check("doubao: activity expiry survives missing subscription", bonusOnlyRows.Count == 1 && bonusOnlyRows[0].Label == "Bonus until"
+                && bonusOnlyRows[0].Value == DoubaoLocalMinute(1792393764820));
+            var zeroExpiryRows = DoubaoData(@"{""current_subscription"":{""end_time"":0,""is_gift"":true},""campaign_benefit_info"":{""benefit_end_time"":0}}").Item3;
+            Check("doubao: zero expiry sentinels never show 1970", zeroExpiryRows.Count == 0);
+            var invalidExpiryRows = DoubaoData(@"{""current_subscription"":{""end_time"":1},""campaign_benefit_info"":{""benefit_end_time"":-1}}").Item3;
+            Check("doubao: invalid expiry values omitted", invalidExpiryRows.Count == 0);
+            var giftExpiryRows = DoubaoData(@"{""current_subscription"":{""end_time"":1794303044488,""is_gift"":true}}").Item3;
+            Check("doubao: gift flag never relabels subscription expiry as bonus", giftExpiryRows.Single().Label == "Plan until");
+
+            Check("doubao: a single general group keeps short window labels", dov.Item3.Any(r => r.Label == "Quota group" && r.Value == "General")
+                && dov.Item2.Select(w => w.Label).SequenceEqual(new[] { "Current period", "Last 7 days" }));
+            var namedGroup = J(ovJson);
+            namedGroup.Obj("data").Obj("window_limit_section").Arr("window_limit_groups").OfType<JObj>().Single()["feature_group_name"] = "  Shared\n   quota \t ";
+            var namedQuota = DoubaoProvider.ParseOverview(namedGroup);
+            Check("doubao: backend group name wins and whitespace collapses", namedQuota.Item3.Any(r => r.Label == "Quota group" && r.Value == "Shared quota")
+                && namedQuota.Item2[0].Label == "Current period");
+            namedGroup.Obj("data").Obj("window_limit_section").Arr("window_limit_groups").OfType<JObj>().Single()["feature_group_name"] = 123;
+            Check("doubao: nonstring group names use the safe fallback", DoubaoProvider.ParseOverview(namedGroup).Item3.Any(r => r.Label == "Quota group" && r.Value == "General"));
+            var doubaoGrouped = DoubaoData(@"{""window_limit_section"":{""usage_exhausted"":true,""window_limit_groups"":[
+                {""feature_group"":""unused_internal"",""window_limits"":[]},
+                {""feature_group"":""private_internal"",""feature_group_name"":""  "",""window_limits"":[{""used_percent"":100,""window_type"":1,""start_time"":0,""end_time"":0}]},
+                {""feature_group"":""general"",""window_limits"":[{""used_percent"":0,""window_type"":2,""start_time"":1790457137809,""end_time"":1791061937809,""less_than_one_percent"":true}]}
+            ]}}");
+            Check("doubao: empty groups excluded and unknown names use original positions", doubaoGrouped.Item3.Single().Label == "Quota groups"
+                && doubaoGrouped.Item3.Single().Value == "Group 2, General"
+                && doubaoGrouped.Item2.Select(w => w.Label).SequenceEqual(new[] { "Group 2 \u00b7 Current period", "General \u00b7 Last 7 days" }));
+            Check("doubao: group labels preserve keys, ordering, exhaustion and reset details", doubaoGrouped.Item2[0].Key == "doubao-private_internal-1-10"
+                && doubaoGrouped.Item2[0].Order == 10 && doubaoGrouped.Item2[0].Exhausted && doubaoGrouped.Item2[0].Detail == "not started" && doubaoGrouped.Item2[0].ResetsAt == null
+                && doubaoGrouped.Item2[1].Key == "doubao-general-2-11" && doubaoGrouped.Item2[1].Order == 11 && !doubaoGrouped.Item2[1].Exhausted
+                && doubaoGrouped.Item2[1].Detail == "<1% used" && doubaoGrouped.Item2[1].ResetsAt != null);
+            var duplicateGroups = DoubaoData(@"{""window_limit_section"":{""window_limit_groups"":[
+                {""feature_group_name"":""Empty"",""window_limits"":[]},
+                {""feature_group_name"":""Shared"",""window_limits"":[{""used_percent"":20,""window_type"":1}]},
+                {""feature_group_name"":""Other"",""window_limits"":[{""used_percent"":30,""window_type"":1}]},
+                {""feature_group_name"":""Shared"",""window_limits"":[{""used_percent"":40,""window_type"":2}]}
+            ]}}");
+            Check("doubao: duplicate names use the effective group position", duplicateGroups.Item3.Single().Value == "Shared (1), Other, Shared (3)"
+                && duplicateGroups.Item2[0].Label == "Shared (1) \u00b7 Current period" && duplicateGroups.Item2[2].Label == "Shared (3) \u00b7 Last 7 days");
+            var unusableGroups = DoubaoData(@"{""window_limit_section"":{""window_limit_groups"":[
+                {""feature_group_name"":""Empty"",""window_limits"":[]},
+                {""feature_group_name"":""Invalid"",""window_limits"":[{""used_percent"":""10""}]}
+            ]}}");
+            Check("doubao: groups without parseable windows are omitted", unusableGroups.Item2.Count == 0 && unusableGroups.Item3.Count == 0);
             var seenDoubao = new List<string>();
+            var doubaoRequests = new List<HttpRequest>();
             Http.Send = req =>
             {
+                doubaoRequests.Add(req);
                 seenDoubao.Add(req.Headers.TryGetValue("Cookie", out var ck) ? ck : "");
-                if (req.Url == DoubaoProvider.ProfileUrl)
+                if (req.Url.StartsWith(DoubaoProvider.ProfileUrl))
                     return new HttpReply(200, "{\"data\":{\"profile_brief\":{\"nickname\":\"\\u5c0f\\u8c46\",\"vip_type\":2}}}");
                 if (req.Url.StartsWith(DoubaoProvider.OverviewUrl)) return new HttpReply(200, ovJson);
                 return new HttpReply(404, "{}");
@@ -443,17 +520,29 @@ namespace QuotaTray.Tests
             var dbr = dbp.Fetch();
             Check("doubao connects", dbr.Ok && dbr.Source.Contains("overview"), dbr.Status);
             Check("doubao: sends the sessionid cookie", seenDoubao.Any(c => c.Contains("sessionid=sk-cookie")), string.Join("|", seenDoubao));
+            Check("doubao: profile uses the captured POST shape", doubaoRequests.Any(r => r.Url.StartsWith(DoubaoProvider.ProfileUrl)
+                && r.Method == "POST" && r.Body == "{\"avatar_format\":\"png\"}" && r.Headers["agw-js-conv"] == "str"));
+            Check("doubao: overview request shape retained", doubaoRequests.Any(r => r.Url.StartsWith(DoubaoProvider.OverviewUrl)
+                && r.Method == "POST" && r.Body == "{\"product_line\":\"membership\"}" && r.Headers["agw-js-conv"] == "str"));
+            var queryNames = "aid,device_platform,language,real_aid,region,samantha_web,sys_region,use-olympus-account,version_code,web_platform";
+            Check("doubao: stable query only, no browser signing credentials", doubaoRequests.Count == 2 && doubaoRequests.All(r =>
+                string.Join(",", new Uri(r.Url).Query.TrimStart('?').Split('&').Select(p => p.Split('=')[0]).OrderBy(p => p, StringComparer.Ordinal)) == queryNames));
+            Check("doubao: credentialed requests do not follow redirects", doubaoRequests.All(r => !r.FollowRedirects));
+            Check("doubao: explicit cookies bypass the .NET CookieContainer", doubaoRequests.All(r => !r.UseCookies));
+            Check("HTTP: other providers keep the default cookie policy", new HttpRequest().UseCookies);
             Check("doubao: account and overview plan win", dbr.Account == "\u5c0f\u8c46" && dbr.Plan == "\u6807\u51c6\u5957\u9910" && dbr.Billing == "subscription", dbr.Plan);
             Check("doubao: window bars shown",
                 string.Join(",", dbr.SortedWindows().Select(w => w.Label)) == "Current period,Last 7 days", string.Join(",", dbr.Windows.Select(w => w.Label)));
             Check("doubao: survives the cache",
                 string.Join(",", ProviderResult.FromCache(Json.ParseObject(Json.Write(dbr.ToCache()))).Windows.Select(w => w.Label)) == "Current period,Last 7 days");
-            // If the overview call is rejected (web signing), the card still shows the account.
-            Http.Send = req => req.Url == DoubaoProvider.ProfileUrl
+            // An overview failure is visible even when optional account metadata succeeds.
+            Http.Send = req => req.Url.StartsWith(DoubaoProvider.ProfileUrl)
                 ? new HttpReply(200, "{\"data\":{\"profile_brief\":{\"nickname\":\"\\u5c0f\\u8c46\",\"vip_type\":2}}}")
                 : new HttpReply(200, "{\"code\":1,\"msg\":\"verify\"}");
             var dbr2 = new DoubaoProvider(new Config()) { SessionOverride = () => Tuple.Create("sk-cookie", new List<string>()) }.Fetch();
             Check("doubao: survives an overview rejection", dbr2.Ok && dbr2.Account == "\u5c0f\u8c46" && dbr2.Windows.Count == 0, dbr2.Status);
+            Check("doubao: overview rejection is visible on a partial card", dbr2.Status == "signed in; usage unavailable: Doubao overview API code 1"
+                && dbr2.Source.Contains("profile/self"), dbr2.Status);
             Http.Send = req => new HttpReply(401, "<html>login</html>");
             var d401 = new DoubaoProvider(new Config()) { SessionOverride = () => Tuple.Create("expired", new List<string>()) }.Fetch();
             Check("doubao: expired login explained", !d401.Ok && d401.Status.ToLowerInvariant().Contains("expired"), d401.Status);
@@ -464,9 +553,84 @@ namespace QuotaTray.Tests
                 !dInvalid.Ok && dInvalid.Status.ToLowerInvariant().Contains("expired") && !dInvalid.Status.ToLowerInvariant().Contains("no account"), dInvalid.Status);
             // session_id may be a whole "k=v; k=v" Cookie string, sent verbatim.
             string seenCookie = null;
-            Http.Send = req => { if (req.Url == DoubaoProvider.ProfileUrl) req.Headers.TryGetValue("Cookie", out seenCookie); return new HttpReply(200, req.Url == DoubaoProvider.ProfileUrl ? "{\"data\":{\"profile_brief\":{\"nickname\":\"\\u5c0f\\u8c46\"}}}" : "{\"code\":1}"); };
+            Http.Send = req => { if (req.Url.StartsWith(DoubaoProvider.ProfileUrl)) req.Headers.TryGetValue("Cookie", out seenCookie); return new HttpReply(200, req.Url.StartsWith(DoubaoProvider.ProfileUrl) ? "{\"data\":{\"profile_brief\":{\"nickname\":\"\\u5c0f\\u8c46\"}}}" : "{\"code\":1}"); };
             new DoubaoProvider(new Config(J("{\"providers\":{\"doubao\":{\"session_id\":\"sessionid=abc; sid_tt=xyz\"}}}"))).Fetch();
             Check("doubao: a full cookie string is sent verbatim", seenCookie == "sessionid=abc; sid_tt=xyz", seenCookie);
+
+            // Synthetic markers prove that reflected response/exception values never
+            // enter diagnostics. No captured credentials are used in these tests.
+            const string reflected = "DO_NOT_LOG_REFLECTED_VALUE";
+            var profileFailures = new Dictionary<string, Func<HttpReply>>
+            {
+                { "404", () => new HttpReply(404, reflected) },
+                { "401", () => new HttpReply(401, reflected) },
+                { "403", () => new HttpReply(403, reflected) },
+                { "login code", () => new HttpReply(200, "{\"code\":710012001,\"msg\":\"" + reflected + "\"}") },
+                { "system code", () => new HttpReply(200, "{\"code\":710010202,\"msg\":\"" + reflected + "\"}") },
+                { "non-JSON", () => new HttpReply(200, reflected) },
+                { "network error", () => throw new IOException(reflected) },
+            };
+            foreach (var scenario in profileFailures)
+            {
+                var overviewCalls = 0;
+                Http.Send = req =>
+                {
+                    if (req.Url.StartsWith(DoubaoProvider.ProfileUrl)) return scenario.Value();
+                    overviewCalls++;
+                    return new HttpReply(200, ovJson);
+                };
+                var actual = new DoubaoProvider(new Config()) { SessionOverride = () => Tuple.Create("dummy", new List<string>()) }.Fetch();
+                Check("doubao: overview survives profile " + scenario.Key,
+                    actual.Ok && actual.Windows.Count == 2 && actual.Plan == "\u6807\u51c6\u5957\u9910" && actual.Account == null
+                    && actual.Status == "connected" && overviewCalls == 1 && actual.Attempts.Any(a => a.Name == "Doubao profile" && !a.Ok), actual.Status);
+                Check("doubao: profile " + scenario.Key + " diagnostics omit reflected values",
+                    !actual.Status.Contains(reflected) && actual.Attempts.All(a => !a.Detail.Contains(reflected)));
+            }
+            var overviewFailures = new[]
+            {
+                Tuple.Create("login code", new HttpReply(200, "{\"code\":710012001,\"msg\":\"" + reflected + "\"}"), "Doubao login expired; re-sign in, or paste a fresh session_id"),
+                Tuple.Create("HTTP 401", new HttpReply(401, reflected), "Doubao login expired; re-sign in, or paste a fresh session_id"),
+                Tuple.Create("HTTP 403", new HttpReply(403, reflected), "Doubao login expired; re-sign in, or paste a fresh session_id"),
+                Tuple.Create("HTTP 503", new HttpReply(503, reflected), "Doubao overview HTTP 503"),
+                Tuple.Create("HTTP 302", new HttpReply(302, reflected), "Doubao overview HTTP 302"),
+                Tuple.Create("API code", new HttpReply(200, "{\"code\":710010202,\"msg\":\"" + reflected + "\"}"), "Doubao overview API code 710010202"),
+                Tuple.Create("invalid code", new HttpReply(200, "{\"code\":\"" + reflected + "\"}"), "Doubao overview returned an invalid API code"),
+                Tuple.Create("non-JSON", new HttpReply(200, reflected), "Doubao overview returned non-JSON"),
+                Tuple.Create("network error", (HttpReply)null, "could not reach Doubao overview"),
+            };
+            foreach (var scenario in overviewFailures)
+            {
+                Http.Send = req => req.Url.StartsWith(DoubaoProvider.ProfileUrl)
+                    ? new HttpReply(404, reflected) : scenario.Item2 ?? throw new IOException(reflected);
+                var actual = new DoubaoProvider(new Config()) { SessionOverride = () => Tuple.Create("dummy", new List<string>()) }.Fetch();
+                Check("doubao: both fail, overview " + scenario.Item1 + " explained",
+                    !actual.Ok && actual.Status == scenario.Item3 && actual.Attempts.Count == 2
+                    && actual.Attempts.All(a => !a.Ok && !a.Detail.Contains(reflected)), actual.Status);
+            }
+            Http.Send = req => req.Url.StartsWith(DoubaoProvider.ProfileUrl) ? new HttpReply(404)
+                : new HttpReply(200, "{\"code\":0,\"data\":{\"current_subscription\":{\"display\":{\"short_name\":\"Synthetic plan\"}}}}");
+            var planOnly = new DoubaoProvider(new Config()) { SessionOverride = () => Tuple.Create("dummy", new List<string>()) }.Fetch();
+            Check("doubao: overview plan usable without profile or windows", planOnly.Ok && planOnly.Plan == "Synthetic plan"
+                && planOnly.Windows.Count == 0 && planOnly.Status == "connected (Doubao returned no usage windows)", planOnly.Status);
+            Http.Send = req => req.Url.StartsWith(DoubaoProvider.ProfileUrl) ? new HttpReply(404)
+                : new HttpReply(200, "{\"code\":0,\"data\":{\"member_info\":{\"hasActiveSubscription\":false}}}");
+            var statusOnly = new DoubaoProvider(new Config()) { SessionOverride = () => Tuple.Create("dummy", new List<string>()) }.Fetch();
+            Check("doubao: status-only overview survives missing account and quota", statusOnly.Ok && statusOnly.Account == null && statusOnly.Plan == null
+                && statusOnly.Windows.Count == 0 && statusOnly.Status == "connected (Doubao returned no usage windows)"
+                && statusOnly.Source.Contains("overview") && statusOnly.Info.Count == 1 && statusOnly.Info[0].Label == "Plan status"
+                && statusOnly.Info[0].Value == "Inactive" && statusOnly.Info[0].Tone == "warn", statusOnly.Status);
+            Http.Send = req => req.Url.StartsWith(DoubaoProvider.ProfileUrl) ? new HttpReply(404)
+                : new HttpReply(200, "{\"code\":0,\"data\":{\"campaign_benefit_info\":{\"benefit_end_time\":1792393764820}}}");
+            var bonusOnly = new DoubaoProvider(new Config()) { SessionOverride = () => Tuple.Create("dummy", new List<string>()) }.Fetch();
+            Check("doubao: bonus-only overview survives missing subscription and quota", bonusOnly.Ok && bonusOnly.Account == null && bonusOnly.Plan == null
+                && bonusOnly.Windows.Count == 0 && bonusOnly.Status == "connected (Doubao returned no usage windows)"
+                && bonusOnly.Source.Contains("overview") && bonusOnly.Info.Count == 1 && bonusOnly.Info[0].Label == "Bonus until"
+                && bonusOnly.Info[0].Value == DoubaoLocalMinute(1792393764820), bonusOnly.Status);
+            Http.Send = req => req.Url.StartsWith(DoubaoProvider.ProfileUrl) ? new HttpReply(404)
+                : new HttpReply(200, "{\"code\":0,\"data\":{}}");
+            var emptyOverview = new DoubaoProvider(new Config()) { SessionOverride = () => Tuple.Create("dummy", new List<string>()) }.Fetch();
+            Check("doubao: empty overview is not false usage success", !emptyOverview.Ok
+                && emptyOverview.Status == "Doubao returned no account, plan or usage windows", emptyOverview.Status);
 
             Console.WriteLine("--- DeepSeek ---");
             Check("jsonc comments and trailing commas", Json.Write(Json.ParseObject(DeepSeekProvider.StripJsonc(

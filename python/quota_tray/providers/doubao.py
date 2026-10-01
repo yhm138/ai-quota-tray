@@ -12,10 +12,9 @@ a short rolling window and a weekly one, the same shape as Claude's windows.
 
   1. read the sessionid cookie from the Doubao Desktop cookie store
      (or a session_id pasted into config.json)
-  2. GET  www.doubao.com/alice/profile/self                       -> the account
-  3. POST www.doubao.com/alice/commerce/sale/subscription/overview -> the plan and
-     window-limit usage (best effort: if Doubao's web signing rejects the
-     call, the card still shows the account and plan from step 2)
+  2. POST www.doubao.com/alice/profile/self -> optional account information
+  3. POST www.doubao.com/alice/commerce/sale/subscription/overview -> plan and
+     window-limit usage, independently of whether the profile call succeeded
 """
 from __future__ import annotations
 
@@ -29,8 +28,9 @@ log = logging.getLogger(__name__)
 
 PROFILE_URL = "https://www.doubao.com/alice/profile/self"
 OVERVIEW_URL = "https://www.doubao.com/alice/commerce/sale/subscription/overview/"
-# The stable query params Doubao's web client sends; the per-request signing
-# params (msToken, a_bogus, device_id) are left off and usually not required.
+# Stable query params from the web client. The overview was verified to work
+# without msToken/a_bogus on 2026-10-01; the optional profile may still reject
+# calls without the browser's per-request context.
 OVERVIEW_PARAMS = {
     "version_code": "20800", "language": "zh", "device_platform": "web",
     "aid": "497858", "real_aid": "497858", "region": "CN", "sys_region": "CN",
@@ -48,7 +48,7 @@ def _login_invalid(payload) -> bool:
     if code in (0, None):
         return False
     text = f"{payload.get('msg', '')} {payload.get('message', '')}".lower()
-    return code in LOGIN_INVALID_CODES or "login invalid" in text or "\u767b\u5f55" in text
+    return (isinstance(code, int) and code in LOGIN_INVALID_CODES) or "login invalid" in text or "\u767b\u5f55" in text
 BROWSER_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
@@ -128,33 +128,45 @@ def parse_overview(payload: dict) -> tuple[str | None, list[QuotaWindow], list[I
     plan = None
     rows: list[InfoRow] = []
     sub = data.get("current_subscription")
-    if isinstance(sub, dict):
-        disp = sub.get("display") if isinstance(sub.get("display"), dict) else {}
-        for key in ("short_name", "product_name"):
-            v = disp.get(key)
-            if isinstance(v, str) and v.strip():
-                plan = v.strip()
-                break
-        # The validity date the app shows ("free trial until ..."): the activity
-        # benefit end wins over the subscription's own period end -- they are
-        # different fields and must not be conflated.
-        benefit = (data.get("campaign_benefit_info") or {}).get("benefit_end_time") \
-            if isinstance(data.get("campaign_benefit_info"), dict) else None
-        is_gift = bool(sub.get("is_gift"))
-        until = parse_time(benefit) if _positive(benefit) else (
-            parse_time(sub.get("end_time")) if _positive(sub.get("end_time")) else None)
+    sub = sub if isinstance(sub, dict) else {}
+    member = data.get("member_info")
+    active = member.get("hasActiveSubscription") if isinstance(member, dict) else None
+    if isinstance(active, bool):
+        status = "Active" if active else "Inactive"
+        trial = sub.get("trial_info")
+        if active and isinstance(trial, dict) and trial.get("is_trialing") is True:
+            status += " (trial)"
+        elif active and sub.get("is_gift") is True:
+            status += " (gift)"
+        rows.append(InfoRow("Plan status", status, "good" if active else "warn"))
+    disp = sub.get("display") if isinstance(sub.get("display"), dict) else {}
+    for key in ("short_name", "product_name"):
+        v = disp.get(key)
+        if isinstance(v, str) and v.strip():
+            plan = v.strip()
+            break
+    # Subscription period and promotional entitlement have separate deadlines.
+    # Neither implies auto-renewal, and one must not hide the other.
+    campaign = data.get("campaign_benefit_info")
+    benefit = campaign.get("benefit_end_time") if isinstance(campaign, dict) else None
+    for label, timestamp in (("Plan until", sub.get("end_time")), ("Bonus until", benefit)):
+        until = parse_time(timestamp) if _positive(timestamp) else None
         if until is not None:
-            label = "Bonus until" if (_positive(benefit) or is_gift) else "Plan until"
-            rows.append(InfoRow(label, until.astimezone().strftime("%Y-%m-%d")))
+            rows.append(InfoRow(label, until.astimezone().strftime("%Y-%m-%d %H:%M")))
     windows: list[QuotaWindow] = []
+    named_groups: list[tuple[str, list[QuotaWindow]]] = []
     section = data.get("window_limit_section")
     order = 10
     if isinstance(section, dict):
         exhausted_all = bool(section.get("usage_exhausted"))
-        for group in section.get("window_limit_groups") or []:
+        for index, group in enumerate(section.get("window_limit_groups") or [], start=1):
             if not isinstance(group, dict):
                 continue
             gname = str(group.get("feature_group") or "")
+            display = group.get("feature_group_name")
+            display = " ".join(display.split()) if isinstance(display, str) else ""
+            display = display or ("General" if gname == "general" else f"Group {index}")
+            group_windows: list[QuotaWindow] = []
             for wl in group.get("window_limits") or []:
                 if not isinstance(wl, dict):
                     continue
@@ -173,13 +185,26 @@ def parse_overview(payload: dict) -> tuple[str | None, list[QuotaWindow], list[I
                     detail = "<1% used"           # a true <1%, not an exact zero
                 else:
                     detail = None
-                windows.append(QuotaWindow(
+                group_windows.append(QuotaWindow(
                     key=f"doubao-{gname}-{wtype}-{order}",
                     label=_window_label(wtype),
                     percent=pct, resets_at=parse_time(end) if started else None,
                     detail=detail, order=order, exhausted=exhausted_all and pct >= 100,
                 ))
                 order += 1
+            if group_windows:
+                named_groups.append((display, group_windows))
+    names = [name for name, _ in named_groups]
+    # Readable names can collide; distinguish the groups without exposing IDs.
+    names = [f"{name} ({i})" if names.count(name) > 1 else name
+             for i, name in enumerate(names, start=1)]
+    for name, (_, group_windows) in zip(names, named_groups):
+        for window in group_windows:
+            if len(names) > 1:
+                window.label = f"{name} \u00b7 {window.label}"
+            windows.append(window)
+    if names:
+        rows.append(InfoRow("Quota group" if len(names) == 1 else "Quota groups", ", ".join(names)))
     return plan, windows, rows
 
 
@@ -218,8 +243,8 @@ class DoubaoProvider(Provider):
     def _cookie_header(self) -> tuple[str | None, list[str]]:
         """The Cookie header to send. From config (session_id) if set -- a bare
         sessionid value or a whole "k=v; k=v" string -- else the full jar read
-        from the app/browser cookie store (Doubao validates more than the lone
-        sessionid, so every cookie for the host is sent, as the app does)."""
+        from the app/browser cookie store. Preserve the complete jar when
+        available; a lone sessionid also works for the subscription overview."""
         manual = (self.settings.get("session_id") or "").strip()
         if manual:
             header = manual if "=" in manual else f"sessionid={manual}"
@@ -246,47 +271,25 @@ class DoubaoProvider(Provider):
                                                  "; ".join(notes[-3:]) or "no Doubao sessionid cookie found"))
             result.status = "Doubao not detected" if not result.installed else "sign in to Doubao Desktop first"
             return
-        headers = {
-            "Cookie": cookie_header,
-            "Accept": "application/json",
-            "Referer": "https://www.doubao.com/chat/",
-            "User-Agent": BROWSER_UA,
-        }
-        try:
-            resp = session().get(PROFILE_URL, headers=headers, timeout=20)
-        except Exception as exc:                                # noqa: BLE001
-            result.attempts.append(SourceAttempt("Doubao profile", False, f"request failed: {exc}"))
-            result.status = "could not reach www.doubao.com"
-            return
-        try:
-            payload = resp.json()
-        except ValueError:
-            payload = None
-        # Doubao answers an invalid/expired login with HTTP 200 and an error
-        # code, not a 401, so that is checked before anything else.
-        if resp.status_code in (401, 403) or _login_invalid(payload):
-            result.attempts.append(SourceAttempt("Doubao profile", False,
-                "login rejected (expired or incomplete cookie)"))
-            result.status = "Doubao login expired; re-sign in, or paste a fresh session_id"
-            return
-        if resp.status_code >= 400:
-            result.attempts.append(SourceAttempt("Doubao profile", False, f"HTTP {resp.status_code}: {resp.text[:160]}"))
-            result.status = f"Doubao profile HTTP {resp.status_code}"
-            return
-        if payload is None:
-            result.attempts.append(SourceAttempt("Doubao profile", False, "response was not JSON (a login page?)"))
-            result.status = "Doubao returned no profile (open the app and sign in)"
-            return
-        account, plan, rows = parse_profile(payload if isinstance(payload, dict) else {})
-        # The subscription overview adds the plan name, the plan validity date
-        # and the window-limit usage; it is best effort (Doubao's web signing
-        # may reject our call).
-        ov_plan, windows, ov_rows = self._overview(cookie_header, result)
+        # The captured browser uses POST for profile (GET returns 404). Profile
+        # can still reject this minimal request without its browser context;
+        # that says nothing about whether the overview accepts the same cookie.
+        payload, _ = self._request("profile", PROFILE_URL, {"avatar_format": "png"},
+                                   cookie_header, result)
+        account, plan, rows = parse_profile(payload) if payload is not None else (None, None, [])
+        if payload is not None:
+            result.attempts.append(SourceAttempt("Doubao profile", bool(account or plan),
+                "account available" if account or plan else "no account in response"))
+        overview, overview_failure = self._request("overview", OVERVIEW_URL,
+            {"product_line": "membership"}, cookie_header, result)
+        ov_plan, windows, ov_rows = parse_overview(overview) if overview is not None else (None, [], [])
+        if overview is not None:
+            result.attempts.append(SourceAttempt("Doubao overview", True,
+                f"{len(windows)} window(s)" if windows else "no usage windows returned"))
         plan = ov_plan or plan
         rows = rows + ov_rows
-        if not account and not plan and not windows:
-            result.attempts.append(SourceAttempt("Doubao profile", False, f"no account in response: {str(payload)[:160]}"))
-            result.status = "signed in, but Doubao returned no account"
+        if not account and not plan and not windows and not ov_rows:
+            result.status = overview_failure or "Doubao returned no account, plan or usage windows"
             return
         result.ok = True
         result.account = account
@@ -294,44 +297,60 @@ class DoubaoProvider(Provider):
         result.info = rows
         result.windows = windows
         result.headline = plan or "signed in"
-        result.source = "www.doubao.com/alice/commerce/sale/subscription/overview"
+        result.source = ("www.doubao.com/alice/commerce/sale/subscription/overview"
+                         if ov_plan or windows or ov_rows else "www.doubao.com/alice/profile/self")
         if windows:
             result.status = "connected"
+        elif overview_failure:
+            result.status = "signed in; usage unavailable: " + overview_failure
         else:
-            result.status = ("connected (open Doubao's \u914d\u989d\u4e2d\u5fc3 for usage)")
+            result.status = "connected (Doubao returned no usage windows)"
         result.data_time = now_utc()
-        result.attempts.append(SourceAttempt("Doubao profile", True, account or plan or "signed in"))
 
-    def _overview(self, cookie_header: str, result: ProviderResult) -> tuple[str | None, list[QuotaWindow], list[InfoRow]]:
-        """Plan, window-limit usage and plan-validity rows, best effort. Never raises."""
+    def _request(self, source: str, url: str, body: dict, cookie_header: str,
+                 result: ProviderResult) -> tuple[dict | None, str | None]:
+        """Independent request, with credential-free failure diagnostics.
+
+        Response bodies, server messages and exception strings can echo secrets.
+        Record only status codes and fixed descriptions, never their raw text.
+        """
         headers = {
             "Cookie": cookie_header,
-            "Accept": "application/json, text/plain, */*",
+            "Accept": "application/json" if source == "profile" else "application/json, text/plain, */*",
             "Content-Type": "application/json",
             "agw-js-conv": "str",
             "Referer": "https://www.doubao.com/chat/",
             "User-Agent": BROWSER_UA,
         }
         try:
-            resp = session().post(OVERVIEW_URL, params=OVERVIEW_PARAMS, headers=headers,
-                                  json={"product_line": "membership"}, timeout=20)
-        except Exception as exc:                                # noqa: BLE001
-            result.attempts.append(SourceAttempt("Doubao overview", False, f"request failed: {exc}"))
-            return None, [], []
-        if resp.status_code >= 400:
-            result.attempts.append(SourceAttempt("Doubao overview", False, f"HTTP {resp.status_code}"))
-            return None, [], []
-        try:
-            payload = resp.json()
-        except ValueError:
-            result.attempts.append(SourceAttempt("Doubao overview", False, "response was not JSON"))
-            return None, [], []
-        if not isinstance(payload, dict) or payload.get("code") not in (0, None):
-            result.attempts.append(SourceAttempt("Doubao overview", False,
-                f"code {payload.get('code')}: {str(payload.get('msg') or payload.get('message'))[:120]}"
-                if isinstance(payload, dict) else "unexpected response"))
-            return None, [], []
-        plan, windows, ov_rows = parse_overview(payload)
-        result.attempts.append(SourceAttempt("Doubao overview", True,
-            f"{len(windows)} window(s)" + (f", {plan}" if plan else "")))
-        return plan, windows, ov_rows
+            resp = session().post(url, params=OVERVIEW_PARAMS, headers=headers,
+                                  json=body, timeout=20, allow_redirects=False)
+        except Exception:                                      # noqa: BLE001
+            failure = f"could not reach Doubao {source}"
+            detail = "request failed (network error)"
+        else:
+            try:
+                payload = resp.json()
+            except ValueError:
+                payload = None
+            code = payload.get("code") if isinstance(payload, dict) else None
+            detail = f"HTTP {resp.status_code}"
+            if isinstance(code, int) and not isinstance(code, bool):
+                detail += f", code {code}"
+            if resp.status_code in (401, 403) or _login_invalid(payload):
+                failure = "Doubao login expired; re-sign in, or paste a fresh session_id"
+                detail += ": login rejected (expired or incomplete cookie)"
+            elif resp.status_code >= 300:
+                failure = f"Doubao {source} HTTP {resp.status_code}"
+            elif not isinstance(payload, dict):
+                failure = f"Doubao {source} returned non-JSON"
+                detail += ": response was not JSON"
+            elif payload.get("code") not in (0, None):
+                failure = (f"Doubao {source} API code {code}"
+                           if isinstance(code, int) and not isinstance(code, bool)
+                           else f"Doubao {source} returned an invalid API code")
+                detail += ": API error"
+            else:
+                return payload, None
+        result.attempts.append(SourceAttempt(f"Doubao {source}", False, detail))
+        return None, failure

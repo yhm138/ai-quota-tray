@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- **C# panel keeps scrolling card text inside its viewport.** Text no longer
+  overlaps the fixed title, tabs or footer on either usage tab, including
+  wrapped account details and error messages.
+- **Doubao card adds plan status and quota groups.** The subscription period
+  end and promotional benefit end appear separately, in local time to the
+  minute. Multiple usage groups are labelled on their bars; absent fields and
+  unknown status codes are not guessed. Python and C# show the same details.
+- **Doubao usage no longer depends on the optional profile request.** The
+  profile now uses POST, and the C# provider sends its explicit Cookie without
+  the .NET Framework CookieContainer overriding it. API failures keep safe
+  status/code diagnostics without recording response bodies or credentials.
+
 ## v1.8.3
 
 - **Hand edits to `config.json` now take effect without a restart.** The
