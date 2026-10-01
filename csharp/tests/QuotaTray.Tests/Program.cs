@@ -597,6 +597,39 @@ namespace QuotaTray.Tests
                 Check("io: owner can replace the file while QuotaTray reads it", replaced);
             }
 
+            Console.WriteLine("--- config.json hand edits ---");
+            {
+                var cf = Paths.ConfigFile;
+                var hadConfig = File.Exists(cf) ? File.ReadAllBytes(cf) : null;
+                try
+                {
+                    // Notepad can save UTF-8 with a BOM; it must still load.
+                    var bom = new byte[] { 0xEF, 0xBB, 0xBF };
+                    File.WriteAllBytes(cf, bom.Concat(Encoding.UTF8.GetBytes("{\"providers\":{\"doubao\":{\"session_id\":\"bom-sid\"}}}")).ToArray());
+                    var c = Config.Load();
+                    Check("config: a BOM-prefixed config.json loads", c.Error == null && c.Provider("doubao").Str("session_id") == "bom-sid", c.Error);
+                    Check("config: unchanged file is not reloaded", !c.ChangedOnDisk());
+                    // A hand edit is noticed without a restart.
+                    File.WriteAllText(cf, "{\"providers\":{\"doubao\":{\"session_id\":\"new-sid\"}}}");
+                    File.SetLastWriteTimeUtc(cf, DateTime.UtcNow.AddSeconds(5));
+                    Check("config: an edit on disk is noticed", c.ChangedOnDisk());
+                    Check("config: reload picks up the new session_id", Config.Load().Provider("doubao").Str("session_id") == "new-sid");
+                    // A typo in the file must NOT be overwritten with defaults.
+                    const string broken = "{\"providers\": {\"doubao\": {\"session_id\": \"keep-me\",,}}}";
+                    File.WriteAllText(cf, broken);
+                    var cb = Config.Load();
+                    Check("config: a broken file reports an error", cb.Error != null, cb.Error ?? "(no error)");
+                    cb.Data["last_reset_reminder"] = "2026-10-01";
+                    cb.Save();
+                    Check("config: a broken file is never overwritten", File.ReadAllText(cf) == broken);
+                }
+                finally
+                {
+                    if (hadConfig != null) File.WriteAllBytes(cf, hadConfig);
+                    else try { File.Delete(cf); } catch (Exception) { }
+                }
+            }
+
             try { Directory.Delete(Paths.AppDir, true); } catch (Exception) { }
             Console.WriteLine($"\npassed {Pass.Count} / {Pass.Count + Fail.Count}");
             if (Fail.Count > 0) Console.WriteLine("failures: " + string.Join("; ", Fail));

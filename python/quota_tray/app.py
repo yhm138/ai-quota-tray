@@ -204,7 +204,18 @@ class QuotaTrayApp:
     def _on_show_diag(self, *_args) -> None:
         self._post(lambda: self.panel.show("diagnostics"))
 
+    def _reload_config_if_changed(self) -> bool:
+        """Pick up hand edits to config.json without a restart. Also called
+        before every save, so a save never writes stale settings over an edit."""
+        if not self.config.changed_on_disk():
+            return False
+        log.info("config.json changed on disk; reloading it")
+        self.config = Config.load()
+        self.providers = build_providers(self.config)
+        return True
+
     def _on_toggle_reminders(self, *_args) -> None:
+        self._reload_config_if_changed()
         on = not self.config.get("remind_unused_resets", True)
         self.config.data["remind_unused_resets"] = on
         self.config.save()
@@ -228,6 +239,7 @@ class QuotaTrayApp:
             return
         log.info("reminding about unused resets: %s", text.replace("\n", " | "))
         self._notify(text)
+        self._reload_config_if_changed()
         self.config.data["last_reset_reminder"] = now_local.date().isoformat()
         self.config.save()
 
@@ -399,10 +411,15 @@ class QuotaTrayApp:
     def refresh_once(self) -> None:
         if self._restart_if_bundle_damaged():
             return
+        try:
+            self._reload_config_if_changed()
+        except Exception:                                       # noqa: BLE001
+            log.exception("reloading config.json failed")
+        providers = self.providers
         self.refreshing = True
         try:
-            with ThreadPoolExecutor(max_workers=max(1, len(self.providers))) as pool:
-                results = list(pool.map(_safe_fetch, self.providers))
+            with ThreadPoolExecutor(max_workers=max(1, len(providers))) as pool:
+                results = list(pool.map(_safe_fetch, providers))
         finally:
             self.refreshing = False
 
@@ -433,7 +450,8 @@ class QuotaTrayApp:
             "danger": self.config.get("danger_percent", 90),
             "subtitle": f"updated {humanize_age(self.last_refresh)}" if self.last_refresh else "",
             "footer": f"v{__version__} - every {self.config.refresh_seconds // 60} min"
-            + (f" - {self.update.tag} available" if self.update else ""),
+            + (f" - {self.update.tag} available" if self.update else "")
+            + (" - config.json has an error (see Diagnostics)" if self.config.error else ""),
         }
 
     # ------------------------------------------------------------ diagnostics
@@ -442,6 +460,8 @@ class QuotaTrayApp:
         lines = [f"{APP_NAME} v{__version__}", ""]
         # What is wrong, in plain words, before the details.
         lines.append("SUMMARY")
+        if self.config.error:
+            lines.append(f"  CONFIG: {self.config.error}; fix the file and it is picked up on the next refresh")
         if not self.results:
             lines.append("  (still collecting, try again in a moment)")
         for r in self.results:

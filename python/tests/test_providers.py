@@ -1455,6 +1455,45 @@ _tmp.write_text(json.dumps({"x": 2}), encoding="utf-8")
 _os.replace(_tmp, _sf)
 check("shareio: owner can replace after a read", json.loads(shareio.read_text(_sf)) == {"x": 2})
 
+# ------------------------------------------------------------------ config hand edits
+
+print("\n--- config.json hand edits ---")
+from quota_tray import config as _cfgmod                          # noqa: E402
+
+_cdir = Path(tempfile.mkdtemp())
+_cpath = _cdir / "config.json"
+_real_cfg_path = _cfgmod.CONFIG_PATH
+_cfgmod.CONFIG_PATH = lambda: _cpath
+try:
+    # Notepad can save UTF-8 with a BOM; it must still load.
+    _cpath.write_bytes(b"\xef\xbb\xbf" + json.dumps(
+        {"providers": {"doubao": {"session_id": "bom-sid"}}}).encode("utf-8"))
+    _c = _cfgmod.Config.load()
+    check("config: a BOM-prefixed config.json loads", _c.error is None
+          and _c.provider("doubao").get("session_id") == "bom-sid", (_c.error, _c.provider("doubao")))
+
+    # A hand edit is noticed without a restart.
+    import time as _time                                           # noqa: E402
+    check("config: unchanged file is not reloaded", not _c.changed_on_disk())
+    _time.sleep(0.05)
+    _cpath.write_text(json.dumps({"providers": {"doubao": {"session_id": "new-sid"}}}), encoding="utf-8")
+    _os_t = _cpath.stat().st_mtime + 2
+    os.utime(_cpath, (_os_t, _os_t))
+    check("config: an edit on disk is noticed", _c.changed_on_disk())
+    check("config: reload picks up the new session_id",
+          _cfgmod.Config.load().provider("doubao").get("session_id") == "new-sid")
+
+    # A typo in the file must NOT be overwritten with defaults.
+    _broken = '{"providers": {"doubao": {"session_id": "keep-me",}}}'   # trailing comma
+    _cpath.write_text(_broken, encoding="utf-8")
+    _cb = _cfgmod.Config.load()
+    check("config: a broken file reports an error", _cb.error is not None, _cb.error)
+    _cb.data["last_reset_reminder"] = "2026-10-01"
+    _cb.save()
+    check("config: a broken file is never overwritten", _cpath.read_text(encoding="utf-8") == _broken)
+finally:
+    _cfgmod.CONFIG_PATH = _real_cfg_path
+
 print(f"\npassed {len(PASS)} / {len(PASS) + len(FAIL)}")
 if FAIL:
     print("failures:", FAIL)

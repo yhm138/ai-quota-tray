@@ -139,28 +139,52 @@ namespace QuotaTray.Core
             return output;
         }
 
+        /// <summary>config.json's write time when it was read or written.</summary>
+        public DateTime? Mtime;
+        /// <summary>Why config.json could not be read, if it couldn't.</summary>
+        public string Error;
+
+        private static DateTime? FileTime(string path)
+        {
+            try { return File.Exists(path) ? File.GetLastWriteTimeUtc(path) : (DateTime?)null; }
+            catch (Exception) { return null; }
+        }
+
         public static Config Load()
         {
             var path = Paths.ConfigFile;
             if (File.Exists(path))
             {
+                string why = "not a JSON object";
                 try
                 {
+                    // ReadAllText detects a UTF-8 BOM (Notepad may save one).
                     var data = Json.ParseObject(File.ReadAllText(path, Encoding.UTF8));
-                    if (data != null) return new Config(data);
+                    if (data != null) return new Config(data) { Mtime = FileTime(path) };
                 }
-                catch (Exception e) { Log.Warn("config.json could not be read: " + e.Message); }
-                Log.Warn("config.json could not be parsed, falling back to defaults");
-                return new Config();
+                catch (Exception e) { why = e.Message; }
+                Log.Warn("config.json could not be read, using defaults until it is fixed: " + why);
+                // Never overwrite the user's file here: it may be a hand edit with a
+                // typo, and saving defaults over it would wipe it.
+                return new Config { Mtime = FileTime(path), Error = "config.json could not be read (" + why + ")" };
             }
             var cfg = new Config();
             cfg.Save();
             return cfg;
         }
 
+        /// <summary>True when config.json was edited (or replaced) since this was read.</summary>
+        public bool ChangedOnDisk() => FileTime(Paths.ConfigFile) != Mtime;
+
         public void Save()
         {
-            try { File.WriteAllText(Paths.ConfigFile, Json.Write(Data, true), new UTF8Encoding(false)); }
+            // The file on disk is the user's (broken) edit; don't clobber it.
+            if (Error != null) return;
+            try
+            {
+                File.WriteAllText(Paths.ConfigFile, Json.Write(Data, true), new UTF8Encoding(false));
+                Mtime = FileTime(Paths.ConfigFile);
+            }
             catch (Exception e) { Log.Warn("failed to write config.json: " + e.Message); }
         }
 
