@@ -112,7 +112,8 @@ namespace QuotaTray.Core
     ""doubao"": {
       ""enabled"": true,
       ""session_id"": """",
-      ""data_dir"": """"
+      ""data_dir"": """",
+      ""scan_browsers"": false
     },
     ""deepseek"": {
       ""enabled"": true,

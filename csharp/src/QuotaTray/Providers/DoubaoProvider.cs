@@ -148,8 +148,11 @@ namespace QuotaTray.Providers
 
         private List<string> ExtraRoots()
         {
+            var roots = new List<string>();
             var text = Core.Settings.Str(Settings, "data_dir");
-            return text.Length > 0 ? new List<string> { text } : new List<string>();
+            if (text.Length > 0) roots.Add(text);
+            if (Core.Settings.Flag(Settings, "scan_browsers", false)) roots.AddRange(Proc.BrowserRoots());
+            return roots;
         }
 
         public override bool Detect()

@@ -98,6 +98,9 @@ DEFAULTS: dict[str, Any] = {
             "session_id": "",            # manual fallback: a doubao.com sessionid cookie
             "data_dir": "",              # portable install: the folder holding the app's
                                          # cookie store (e.g. D:\\Doubao or its "User Data")
+            "scan_browsers": False,      # also read the doubao.com cookie from Edge/Chrome/
+                                         # Brave/etc. (won't work if the browser App-Bound-
+                                         # encrypts cookies; then paste session_id instead)
         },
         "deepseek": {
             "enabled": True,

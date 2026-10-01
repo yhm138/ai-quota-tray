@@ -455,6 +455,35 @@ from quota_tray.providers import doubao as _doubao_mod              # noqa: E402
 check("doubao detects a portable data_dir",
       _doubao_mod.DoubaoProvider(Config({"providers": {"doubao": {"data_dir": str(portable)}}})).detect())
 
+# Optional browser scan: the doubao.com cookie read from an Edge/Chrome profile.
+browser_home = Path(tempfile.mkdtemp())
+edge = browser_home / "Microsoft" / "Edge" / "User Data"
+eprof = edge / "Profile 1" / "Network"
+eprof.mkdir(parents=True)
+econn = sqlite3.connect(eprof / "Cookies")
+econn.execute("CREATE TABLE cookies (host_key TEXT, name TEXT, value TEXT, "
+              "encrypted_value BLOB, expires_utc INTEGER)")
+econn.execute("INSERT INTO cookies VALUES ('.doubao.com', 'sessionid', 'edge-sid', x'', 1)")
+econn.commit()
+econn.close()
+_env2 = dict(cc.os.environ)
+cc.os.environ["LOCALAPPDATA"] = str(browser_home)
+cc.os.environ.pop("APPDATA", None)
+try:
+    broots = cc.browser_roots()
+    check("browser_roots finds Edge user-data", edge in broots, broots)
+    check("Profile */ cookie DB found", (eprof / "Cookies") in cc.find_cookie_dbs(edge),
+          cc.find_cookie_dbs(edge))
+    djar, _ = cc.get_cookies("Doubao", "%doubao.com", "sessionid", [str(edge)])
+    check("browser sessionid read", djar.get("sessionid") == "edge-sid", djar)
+    on = _doubao_mod.DoubaoProvider(Config({"providers": {"doubao": {"scan_browsers": True}}}))
+    check("doubao scan_browsers adds Edge root", str(edge) in on._extra_roots(), on._extra_roots())
+    off = _doubao_mod.DoubaoProvider(Config({"providers": {"doubao": {"scan_browsers": False}}}))
+    check("doubao without scan_browsers ignores Edge", not any("Edge" in r for r in off._extra_roots()), off._extra_roots())
+finally:
+    cc.os.environ.clear()
+    cc.os.environ.update(_env2)
+
 # ------------------------------------------------------------------ updater
 
 print("\n--- updater ---")
