@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v1.8.4
 
 - **C# panel keeps scrolling card text inside its viewport.** Text no longer
   overlaps the fixed title, tabs or footer on either usage tab, including
