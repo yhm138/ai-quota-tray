@@ -17,7 +17,7 @@ namespace QuotaTray.Win
         /// <summary>The OSCrypt key from Local State, unwrapped with DPAPI.</summary>
         public static byte[] MasterKey(string localState)
         {
-            var data = Json.ParseObject(File.ReadAllText(localState, Encoding.UTF8))
+            var data = Json.ParseObject(Io.ReadAllTextShared(localState) ?? "")
                        ?? throw new CryptoError("cannot read Local State");
             var encoded = data.Obj("os_crypt")?.Str("encrypted_key");
             if (string.IsNullOrEmpty(encoded)) throw new CryptoError("Local State has no os_crypt.encrypted_key");

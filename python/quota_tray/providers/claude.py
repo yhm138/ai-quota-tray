@@ -183,9 +183,14 @@ def credential_candidates(settings: dict) -> list[Path]:
 
 def _token_from_file(path: Path) -> tuple[str | None, float | None, str | None]:
     """Return (access_token, expiresAt in ms, subscriptionType)."""
+    from ..win.shareio import read_text as _read_shared
+
+    text = _read_shared(path)
+    if text is None:
+        return None, None, None
     try:
-        data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
-    except (OSError, json.JSONDecodeError):
+        data = json.loads(text)
+    except json.JSONDecodeError:
         return None, None, None
     node = data.get("claudeAiOauth") or data.get("oauth") or data
     if not isinstance(node, dict):
@@ -783,9 +788,14 @@ def desktop_oauth_tokens(roots: list[Path] | None = None) -> tuple[list[tuple[st
     now_ms = now_utc().timestamp() * 1000
     for root in roots:
         cfg = root / "config.json"
+        from ..win.shareio import read_text as _read_shared
+
+        _cfg_text = _read_shared(cfg)
         try:
-            data = json.loads(cfg.read_text(encoding="utf-8", errors="replace"))
-        except (OSError, ValueError):
+            data = json.loads(_cfg_text) if _cfg_text is not None else None
+        except ValueError:
+            data = None
+        if data is None:
             notes.append(f"{root.name}: no readable config.json")
             continue
         caches = [(k, data.get(k)) for k in DESKTOP_TOKEN_CACHE_KEYS

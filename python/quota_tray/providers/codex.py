@@ -512,7 +512,12 @@ class CodexProvider(Provider):
             try:
                 if not path.is_file():
                     continue
-                data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+                from ..win.shareio import read_text as _read_shared
+
+                _txt = _read_shared(path)
+                if _txt is None:
+                    continue
+                data = json.loads(_txt)
             except (OSError, json.JSONDecodeError):
                 continue
             tokens = data.get("tokens") if isinstance(data, dict) else None

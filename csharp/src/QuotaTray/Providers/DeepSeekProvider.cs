@@ -261,7 +261,7 @@ namespace QuotaTray.Providers
 
         private static string Read(string path)
         {
-            try { return File.Exists(path) ? File.ReadAllText(path, Encoding.UTF8) : null; }
+            try { return File.Exists(path) ? Io.ReadAllTextShared(path) : null; }
             catch (Exception) { return null; }
         }
 

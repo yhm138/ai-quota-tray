@@ -262,8 +262,10 @@ def opencode_label(cli: bool, desktop: bool, distro: str = "", desktop_distros=(
 
 
 def _read(path: Path) -> str | None:
+    from ..win.shareio import read_text as _read_shared
+
     try:
-        return path.read_text(encoding="utf-8-sig", errors="replace") if path.is_file() else None
+        return _read_shared(path) if path.is_file() else None
     except OSError:
         return None
 

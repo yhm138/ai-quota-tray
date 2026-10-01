@@ -80,7 +80,10 @@ DEFAULTS: dict[str, Any] = {
             "max_models": 6,
         },
         "gemini": {
-            "enabled": True,
+            # Off by default: Google deprecated Gemini CLI for individual
+            # accounts ("migrate to Antigravity"), so its quota API fails for
+            # most. Set to true if your account still works.
+            "enabled": False,
             "gemini_home": "",           # manual fallback: alternate .gemini folder
             "scan_wsl": True,
         },

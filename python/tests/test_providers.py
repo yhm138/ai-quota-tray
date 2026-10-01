@@ -1313,6 +1313,27 @@ nr = deepseek.DeepSeekProvider(Config()).fetch()
 check("deepseek: no key, not installed", not nr.ok and not nr.installed)
 deepseek.discover_keys = real_discover
 
+# ------------------------------------------------------------------ shared reads
+
+print("\n--- shared credential reads ---")
+from quota_tray.win import shareio                                 # noqa: E402
+
+_sdir = Path(tempfile.mkdtemp())
+_sf = _sdir / "oauth_creds.json"
+_sf.write_text(json.dumps({"access_token": "abc"}), encoding="utf-8")
+check("shareio: reads a credential file", shareio.read_text(_sf) is not None
+      and json.loads(shareio.read_text(_sf))["access_token"] == "abc")
+_sf.write_bytes(b"\xef\xbb\xbf" + json.dumps({"x": 1}).encode())
+check("shareio: strips a UTF-8 BOM", json.loads(shareio.read_text(_sf)) == {"x": 1})
+check("shareio: missing file is None", shareio.read_text(_sdir / "nope.json") is None)
+# The owning CLI must be able to replace the file; the reader never holds it.
+import os as _os                                                   # noqa: E402
+_before = shareio.read_text(_sf)
+_tmp = _sf.with_suffix(".tmp")
+_tmp.write_text(json.dumps({"x": 2}), encoding="utf-8")
+_os.replace(_tmp, _sf)
+check("shareio: owner can replace after a read", json.loads(shareio.read_text(_sf)) == {"x": 2})
+
 print(f"\npassed {len(PASS)} / {len(PASS) + len(FAIL)}")
 if FAIL:
     print("failures:", FAIL)

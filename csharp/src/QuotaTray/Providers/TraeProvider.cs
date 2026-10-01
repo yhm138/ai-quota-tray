@@ -150,7 +150,7 @@ namespace QuotaTray.Providers
         public static Tuple<string, string> ReadStorageAuth(string storagePath)
         {
             JObj root;
-            try { root = Json.ParseObject(File.ReadAllText(storagePath, Encoding.UTF8)); }
+            try { var _t = Io.ReadAllTextShared(storagePath); root = _t != null ? Json.ParseObject(_t) : null; }
             catch (Exception) { return Tuple.Create((string)null, (string)null); }
             if (root == null) return Tuple.Create((string)null, (string)null);
             var authKey = UserAuthKey(root);

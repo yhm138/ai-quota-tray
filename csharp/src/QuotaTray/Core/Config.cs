@@ -99,7 +99,7 @@ namespace QuotaTray.Core
       ""max_models"": 6
     },
     ""gemini"": {
-      ""enabled"": true,
+      ""enabled"": false,
       ""gemini_home"": """",
       ""scan_wsl"": true
     },

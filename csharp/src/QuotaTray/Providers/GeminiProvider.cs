@@ -77,7 +77,7 @@ namespace QuotaTray.Providers
                 if (!Proc.SafeFileExists(path)) continue;
                 checkedCount++;
                 JObj data;
-                try { data = Json.ParseObject(File.ReadAllText(path, Encoding.UTF8)); }
+                try { var _t = Io.ReadAllTextShared(path); data = _t != null ? Json.ParseObject(_t) : null; }
                 catch (Exception) { data = null; }
                 if (data == null || (data.Str("access_token") == null && data.Str("refresh_token") == null))
                 {

@@ -68,9 +68,14 @@ def _gemini_dirs(settings: dict) -> list[tuple[Path, str]]:
 
 
 def _read_creds(path: Path) -> dict | None:
+    from ..win.shareio import read_text as _read_shared
+
+    text = _read_shared(path)
+    if text is None:
+        return None
     try:
-        data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
-    except (OSError, ValueError):
+        data = json.loads(text)
+    except ValueError:
         return None
     return data if isinstance(data, dict) and (data.get("access_token") or data.get("refresh_token")) else None
 

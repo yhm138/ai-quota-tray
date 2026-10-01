@@ -1,5 +1,22 @@
 # Changelog
 
+## v1.6.1
+
+- **QuotaTray no longer blocks `gemini` (or any CLI) on startup.** The
+  credential files QuotaTray reads (`oauth_creds.json`, Codex/Claude
+  `auth.json`, TRAE `storage.json`, DeepSeek keys, Chromium cookie stores)
+  are now opened with full sharing, including delete. Those CLIs refresh
+  their token on launch and replace the file with an atomic rename; without
+  the delete share that rename was denied while QuotaTray held the file
+  open, so `gemini` would hang waiting to re-authorize. Both editions read
+  every credential through one shared-read helper now, so they never get in
+  the owning CLI's way
+- **The Gemini CLI card is off by default.** Google deprecated Gemini CLI
+  for individual Google accounts (sign-in now says to migrate to
+  Antigravity), so its quota API fails for most accounts. Set
+  `gemini.enabled` to `true` if your account still works; the card is
+  unchanged otherwise
+
 ## v1.6.0
 
 - **Three more products** (both editions):
