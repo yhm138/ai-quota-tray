@@ -6,26 +6,36 @@ Claude Desktop's (OSCrypt key wrapped with DPAPI). With that cookie the
 account profile endpoint reports who is signed in and, when the account
 exposes it, the membership.
 
-Doubao does not publish a "remaining quota" API the way Codex or DeepSeek do
-(the per-day points show only inside the app's own \u914d\u989d\u4e2d\u5fc3 page), so this card
-shows the signed-in account and plan; any usage-looking field the profile
-returns is shown too, but there is usually none.
+Doubao's subscription "overview" endpoint reports the plan and the
+"window limit" usage the \u914d\u989d\u4e2d\u5fc3 (quota centre) page shows: a used-percent for
+a short rolling window and a weekly one, the same shape as Claude's windows.
 
   1. read the sessionid cookie from the Doubao Desktop cookie store
      (or a session_id pasted into config.json)
-  2. GET www.doubao.com/alice/profile/self -> the account (and plan, if any)
+  2. GET  www.doubao.com/alice/profile/self                       -> the account
+  3. POST www.doubao.com/alice/commerce/sale/subscription/overview -> the plan and
+     window-limit usage (best effort: if Doubao's web signing rejects the
+     call, the card still shows the account and plan from step 2)
 """
 from __future__ import annotations
 
 import logging
 import sys
 
-from ..model import InfoRow, ProviderResult, SourceAttempt, now_utc
+from ..model import InfoRow, ProviderResult, QuotaWindow, SourceAttempt, now_utc, parse_time
 from .base import Provider, session
 
 log = logging.getLogger(__name__)
 
 PROFILE_URL = "https://www.doubao.com/alice/profile/self"
+OVERVIEW_URL = "https://www.doubao.com/alice/commerce/sale/subscription/overview/"
+# The stable query params Doubao's web client sends; the per-request signing
+# params (msToken, a_bogus, device_id) are left off and usually not required.
+OVERVIEW_PARAMS = {
+    "version_code": "20800", "language": "zh", "device_platform": "web",
+    "aid": "497858", "real_aid": "497858", "region": "CN", "sys_region": "CN",
+    "samantha_web": "1", "web_platform": "browser", "use-olympus-account": "1",
+}
 APP_FOLDERS = ("Doubao", "doubao")
 BROWSER_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -85,15 +95,84 @@ def parse_profile(payload: dict) -> tuple[str | None, str | None, list[InfoRow]]
     return account, plan, rows
 
 
+def _window_label(start_ms, end_ms, window_type) -> str:
+    """Name a window by its length: 5-hour, Daily, Weekly."""
+    try:
+        hours = (float(end_ms) - float(start_ms)) / 3_600_000.0
+    except (TypeError, ValueError):
+        hours = 0.0
+    if hours >= 100:
+        return "Weekly"
+    if hours >= 20:
+        return "Daily"
+    if hours >= 1:
+        return f"{int(round(hours))}-hour"
+    return {1: "5-hour", 2: "Weekly"}.get(window_type, "Window")
+
+
+def parse_overview(payload: dict) -> tuple[str | None, list[QuotaWindow], list[InfoRow]]:
+    """(plan, windows, rows) from the subscription overview response."""
+    data = payload.get("data") if isinstance(payload, dict) else None
+    data = data if isinstance(data, dict) else {}
+    plan = None
+    sub = data.get("current_subscription")
+    if isinstance(sub, dict):
+        disp = sub.get("display") if isinstance(sub.get("display"), dict) else {}
+        for key in ("short_name", "product_name"):
+            v = disp.get(key)
+            if isinstance(v, str) and v.strip():
+                plan = v.strip()
+                break
+    windows: list[QuotaWindow] = []
+    section = data.get("window_limit_section")
+    order = 10
+    if isinstance(section, dict):
+        exhausted_all = bool(section.get("usage_exhausted"))
+        for group in section.get("window_limit_groups") or []:
+            if not isinstance(group, dict):
+                continue
+            gname = str(group.get("feature_group") or "")
+            for wl in group.get("window_limits") or []:
+                if not isinstance(wl, dict):
+                    continue
+                pct = wl.get("used_percent")
+                if not isinstance(pct, (int, float)) or isinstance(pct, bool):
+                    continue
+                pct = max(0.0, min(100.0, float(pct)))
+                wtype = wl.get("window_type")
+                detail = "<1% used" if wl.get("less_than_one_percent") and pct <= 0 else None
+                windows.append(QuotaWindow(
+                    key=f"doubao-{gname}-{wtype}-{order}",
+                    label=_window_label(wl.get("start_time"), wl.get("end_time"), wtype),
+                    percent=pct, resets_at=parse_time(wl.get("end_time")),
+                    detail=detail, order=order, exhausted=exhausted_all and pct >= 100,
+                ))
+                order += 1
+    return plan, windows, []
+
+
 class DoubaoProvider(Provider):
     id = "doubao"
     name = "Doubao"
 
+    def _extra_roots(self) -> list[str]:
+        """A portable install's folder, from config (data_dir)."""
+        text = (self.settings.get("data_dir") or "").strip()
+        return [text] if text else []
+
     def detect(self) -> bool:
         if (self.settings.get("session_id") or "").strip():
             return True
+        from pathlib import Path
+
         from ..win.chromium_cookies import app_roots
 
+        for raw in self._extra_roots():
+            try:
+                if Path(raw).is_dir():
+                    return True
+            except OSError:
+                continue
         return any(app_roots(folder) for folder in APP_FOLDERS)
 
     def _session_key(self) -> tuple[str | None, list[str]]:
@@ -104,9 +183,11 @@ class DoubaoProvider(Provider):
             return None, ["reading the Doubao cookie is Windows-only"]
         from ..win.chromium_cookies import get_cookies
 
+        extra = self._extra_roots()
         all_notes: list[str] = []
-        for folder in APP_FOLDERS:
-            jar, notes = get_cookies(folder, "%doubao.com", "sessionid")
+        for i, folder in enumerate(APP_FOLDERS):
+            # The configured portable folder only needs searching once.
+            jar, notes = get_cookies(folder, "%doubao.com", "sessionid", extra if i == 0 else None)
             all_notes += notes
             key = jar.get("sessionid") or jar.get("session_id")
             if key:
@@ -148,7 +229,11 @@ class DoubaoProvider(Provider):
             result.status = "Doubao returned no profile (open the app and sign in)"
             return
         account, plan, rows = parse_profile(payload if isinstance(payload, dict) else {})
-        if not account and not plan:
+        # The subscription overview adds the plan name and the window-limit
+        # usage; it is best effort (Doubao's web signing may reject our call).
+        ov_plan, windows = self._overview(session_key, result)
+        plan = ov_plan or plan
+        if not account and not plan and not windows:
             result.attempts.append(SourceAttempt("Doubao profile", False, f"no account in response: {str(payload)[:160]}"))
             result.status = "signed in, but Doubao returned no account"
             return
@@ -156,10 +241,46 @@ class DoubaoProvider(Provider):
         result.account = account
         result.plan = plan
         result.info = rows
-        # Doubao exposes no usage number through the API; say so plainly.
+        result.windows = windows
         result.headline = plan or "signed in"
-        result.source = "www.doubao.com/alice/profile/self"
-        result.status = ("connected (Doubao shows usage only in its own \u914d\u989d\u4e2d\u5fc3)"
-                         if not rows else "connected")
+        result.source = "www.doubao.com/alice/commerce/sale/subscription/overview"
+        if windows:
+            result.status = "connected"
+        else:
+            result.status = ("connected (open Doubao's \u914d\u989d\u4e2d\u5fc3 for usage)")
         result.data_time = now_utc()
         result.attempts.append(SourceAttempt("Doubao profile", True, account or plan or "signed in"))
+
+    def _overview(self, session_key: str, result: ProviderResult) -> tuple[str | None, list[QuotaWindow]]:
+        """Plan and window-limit usage, best effort. Never raises."""
+        headers = {
+            "Cookie": f"sessionid={session_key}",
+            "Accept": "application/json, text/plain, */*",
+            "Content-Type": "application/json",
+            "agw-js-conv": "str",
+            "Referer": "https://www.doubao.com/chat/",
+            "User-Agent": BROWSER_UA,
+        }
+        try:
+            resp = session().post(OVERVIEW_URL, params=OVERVIEW_PARAMS, headers=headers,
+                                  json={"product_line": "membership"}, timeout=20)
+        except Exception as exc:                                # noqa: BLE001
+            result.attempts.append(SourceAttempt("Doubao overview", False, f"request failed: {exc}"))
+            return None, []
+        if resp.status_code >= 400:
+            result.attempts.append(SourceAttempt("Doubao overview", False, f"HTTP {resp.status_code}"))
+            return None, []
+        try:
+            payload = resp.json()
+        except ValueError:
+            result.attempts.append(SourceAttempt("Doubao overview", False, "response was not JSON"))
+            return None, []
+        if not isinstance(payload, dict) or payload.get("code") not in (0, None):
+            result.attempts.append(SourceAttempt("Doubao overview", False,
+                f"code {payload.get('code')}: {str(payload.get('msg') or payload.get('message'))[:120]}"
+                if isinstance(payload, dict) else "unexpected response"))
+            return None, []
+        plan, windows, _ = parse_overview(payload)
+        result.attempts.append(SourceAttempt("Doubao overview", True,
+            f"{len(windows)} window(s)" + (f", {plan}" if plan else "")))
+        return plan, windows

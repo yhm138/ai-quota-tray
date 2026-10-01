@@ -51,7 +51,7 @@ per product. Click it and the panel (screenshot above) shows, per product:
   you once a day while any are unused.
 - **More products**: **Gemini CLI** (per-model quota and tier), **TRAE (Trae
   CN)** (plan and fast-request usage), and the **Doubao** desktop client
-  (signed-in account and membership).
+  (plan and window-limit usage).
 - **Two tabs**: *Subscriptions* (Claude, Codex, Antigravity, Gemini CLI, TRAE,
   Doubao) and *Pay as you go*, where the **DeepSeek API balance** of the key
   that OpenCode or DeepSeek Harness (dsh) keeps is shown: total, topped up and
@@ -282,11 +282,19 @@ and each WSL user.
 
 Doubao's desktop client is an Electron app for www.doubao.com. QuotaTray reads
 its `sessionid` cookie from the app's cookie store (the same OSCrypt/DPAPI +
-AES-GCM scheme as Claude Desktop) and calls `/alice/profile/self` for the
-signed-in account and membership. Doubao does **not** publish a remaining-quota
-API — its per-day points show only inside the app's own 配额中心 (quota center) —
-so this card shows the account and plan, not a usage bar. Paste a `session_id`
-into config.json to override the cookie read.
+AES-GCM scheme as Claude Desktop), calls `/alice/profile/self` for the signed-in
+account, and reads the subscription *overview*
+(`/alice/commerce/sale/subscription/overview`) for the plan and the
+**window-limit usage** — a 5-hour window and a weekly one, the same shape as
+Claude's. The overview call is best effort: if Doubao's web signing rejects it,
+the card still shows the account and plan.
+
+- **Portable install?** Set `doubao.data_dir` in config.json to the folder that
+  holds the app's cookie store (the portable install folder, or its `User Data`
+  subfolder).
+- **Card can't read the cookie?** Recent Doubao builds encrypt cookies with
+  App-Bound encryption, which QuotaTray cannot decrypt. Copy the `sessionid`
+  value from the app and paste it into `doubao.session_id` in config.json.
 
 ### DeepSeek (pay as you go)
 
@@ -468,7 +476,7 @@ MIT — see [LICENSE](LICENSE).
 - **账号信息**：套餐与状态（Claude 套餐已取消会显示为黄色）、订阅开始或续费日期、Claude 额外用量、Codex 积分。
 - **多账号**：Claude Code 和 Claude Desktop（或 Windows 与 WSL 里的 Codex）登录的是不同账号时，卡片上会出现 ‹ › 按钮，每个账号一页。
 - **可用的额度重置**：Anthropic 和 OpenAI 发放的一次性重置，还剩几次、最早哪天过期。只要还有没用的，每天会弹一次提醒。
-- **更多产品**：**Gemini CLI**（各模型额度和套餐档位）、**TRAE（Trae CN）**（套餐和 fast request 用量）、**豆包**桌面客户端（登录账号和会员）。
+- **更多产品**：**Gemini CLI**（各模型额度和套餐档位）、**TRAE（Trae CN）**（套餐和 fast request 用量）、**豆包**桌面客户端（套餐和窗口额度用量）。
 - **两个标签页**：*Subscriptions*（订阅制：Claude、Codex、Antigravity、Gemini CLI、TRAE、豆包）和 *Pay as you go*（按量计费）。按量计费页显示 OpenCode 或 DeepSeek Harness（dsh）里保存的 **DeepSeek API Key 的余额**：总余额、充值部分和赠送部分，余额偏低时变黄。卡片太多、屏幕放不下时，每个标签页都可以滚动。
 
 **不需要登录**。它读取你机器上各个工具已经写好的凭据（包括 Claude Desktop 自己的登录），而且每个产品都有**多条兜底路径**，某一条不通时自动换下一条。新版本在托盘菜单里一键安装。
@@ -622,7 +630,10 @@ TRAE 把它的 Cloud-IDE JWT 存在 `%APPDATA%\Trae CN\User\globalStorage\storag
 
 ### 豆包
 
-豆包桌面客户端是 www.doubao.com 的 Electron 应用。QuotaTray 从它的 cookie 库里读 `sessionid` cookie（和 Claude Desktop 一样的 OSCrypt/DPAPI + AES-GCM 方案），再调 `/alice/profile/self` 拿登录账号和会员信息。豆包**没有**公开的“剩余额度”接口——每天的次数只在客户端自己的“配额中心”里显示——所以这张卡片显示账号和套餐，没有用量条。可以在 config.json 里手填 `session_id` 覆盖 cookie 读取。
+豆包桌面客户端是 www.doubao.com 的 Electron 应用。QuotaTray 从它的 cookie 库里读 `sessionid` cookie（和 Claude Desktop 一样的 OSCrypt/DPAPI + AES-GCM 方案），调 `/alice/profile/self` 拿登录账号，再调订阅 overview 接口（`/alice/commerce/sale/subscription/overview`）拿套餐和**窗口额度用量**——一个 5 小时窗口和一个每周窗口，和 Claude 的窗口一样。overview 是尽力而为：如果豆包的网页签名拒绝了请求，卡片仍会显示账号和套餐。
+
+- **便携版（Portable）？** 在 config.json 里把 `doubao.data_dir` 设成存放 cookie 库的文件夹（便携版安装目录，或其下的 `User Data` 子目录）。
+- **读不到 cookie？** 新版豆包用 App-Bound 加密 cookie，QuotaTray 无法解密。把应用里的 `sessionid` 值复制出来，填到 config.json 的 `doubao.session_id` 即可。
 
 ### DeepSeek（按量计费）
 

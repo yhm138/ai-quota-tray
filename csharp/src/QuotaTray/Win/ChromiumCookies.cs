@@ -39,6 +39,10 @@ namespace QuotaTray.Win
             void Add(string p) { if (File.Exists(p) && !found.Contains(p)) found.Add(p); }
             Add(Path.Combine(root, "Network", "Cookies"));
             Add(Path.Combine(root, "Cookies"));
+            // A portable Chromium build may lay out its profile the browser way,
+            // with the cookie store under a "Default" profile folder.
+            Add(Path.Combine(root, "Default", "Network", "Cookies"));
+            Add(Path.Combine(root, "Default", "Cookies"));
             foreach (var pattern in new[] { Path.Combine("Partitions", "*", "Network", "Cookies"),
                                             Path.Combine("Partitions", "*", "Cookies") })
             {
@@ -115,10 +119,10 @@ namespace QuotaTray.Win
         private static object At(List<object> v, int i) => i >= 0 && i < v.Count ? v[i] : null;
 
         /// <summary>Every cookie for hostContains from the first jar that has `required`.</summary>
-        public static Tuple<Dictionary<string, string>, List<string>> GetCookies(string appFolder, string hostContains, string required)
+        public static Tuple<Dictionary<string, string>, List<string>> GetCookies(string appFolder, string hostContains, string required, IEnumerable<string> extraRoots = null)
         {
             var notes = new List<string>();
-            var roots = Proc.AppRoots(appFolder);
+            var roots = Proc.AppRoots(appFolder, extraRoots);
             if (roots.Count == 0)
             {
                 notes.Add($"no data directory found for {appFolder}");

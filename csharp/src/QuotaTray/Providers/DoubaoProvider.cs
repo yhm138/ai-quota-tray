@@ -7,11 +7,11 @@ using QuotaTray.Win;
 namespace QuotaTray.Providers
 {
     /// <summary>
-    /// Doubao (Douban's AI assistant) desktop client. It is an Electron app for
-    /// www.doubao.com and keeps a sessionid cookie in its cookie store. With it,
-    /// the profile endpoint reports the signed-in account (and membership, when
-    /// the account exposes one). Doubao does not publish a "remaining quota" API,
-    /// so no usage bar is shown.
+    /// Doubao desktop client. It is an Electron app for www.doubao.com and keeps
+    /// a sessionid cookie in its cookie store. With it, the profile endpoint
+    /// reports the signed-in account and the subscription "overview" endpoint
+    /// reports the plan and the window-limit usage (a short rolling window and a
+    /// weekly one, the same shape as Claude's windows).
     /// </summary>
     public sealed class DoubaoProvider : Provider
     {
@@ -19,6 +19,14 @@ namespace QuotaTray.Providers
         public override string Name => "Doubao";
 
         public const string ProfileUrl = "https://www.doubao.com/alice/profile/self";
+        public const string OverviewUrl = "https://www.doubao.com/alice/commerce/sale/subscription/overview/";
+        // The stable query params Doubao's web client sends; per-request signing
+        // params (msToken, a_bogus, device_id) are left off and usually not required.
+        private static readonly string[] OverviewParams = {
+            "version_code", "20800", "language", "zh", "device_platform", "web",
+            "aid", "497858", "real_aid", "497858", "region", "CN", "sys_region", "CN",
+            "samantha_web", "1", "web_platform", "browser", "use-olympus-account", "1",
+        };
         private static readonly string[] AppFolders = { "Doubao", "doubao" };
         private const string BrowserUa = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                                           + "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
@@ -88,9 +96,66 @@ namespace QuotaTray.Providers
             return Tuple.Create(account, plan, rows);
         }
 
+        private static string WindowLabel(object startMs, object endMs, double? windowType)
+        {
+            var start = Json.AsNumber(startMs);
+            var end = Json.AsNumber(endMs);
+            var hours = (start != null && end != null) ? (end.Value - start.Value) / 3_600_000.0 : 0.0;
+            if (hours >= 100) return "Weekly";
+            if (hours >= 20) return "Daily";
+            if (hours >= 1) return ((int)Math.Round(hours)) + "-hour";
+            return windowType == 2 ? "Weekly" : "5-hour";
+        }
+
+        /// <summary>(plan, windows) from the subscription overview response.</summary>
+        public static Tuple<string, List<QuotaWindow>> ParseOverview(JObj payload)
+        {
+            var data = payload?.Obj("data");
+            string plan = null;
+            var disp = data?.Obj("current_subscription")?.Obj("display");
+            if (disp != null)
+                foreach (var key in new[] { "short_name", "product_name" })
+                {
+                    var v = disp.Str(key);
+                    if (!string.IsNullOrEmpty(v)) { plan = v.Trim(); break; }
+                }
+            var windows = new List<QuotaWindow>();
+            var section = data?.Obj("window_limit_section");
+            if (section != null)
+            {
+                var exhaustedAll = section["usage_exhausted"] is bool eb && eb;
+                var order = 10;
+                foreach (var group in (section.Arr("window_limit_groups") ?? new List<object>()).OfType<JObj>())
+                {
+                    var gname = group.Str("feature_group") ?? "";
+                    foreach (var wl in (group.Arr("window_limits") ?? new List<object>()).OfType<JObj>())
+                    {
+                        var pctNum = wl.Num("used_percent");
+                        if (pctNum == null) continue;
+                        var pct = Math.Max(0.0, Math.Min(100.0, pctNum.Value));
+                        var wtype = wl.Num("window_type");
+                        var lessThanOne = wl["less_than_one_percent"] is bool lb && lb;
+                        var detail = (lessThanOne && pct <= 0) ? "<1% used" : null;
+                        windows.Add(new QuotaWindow($"doubao-{gname}-{wtype}-{order}",
+                            WindowLabel(wl["start_time"], wl["end_time"], wtype), pct,
+                            Time.Parse(wl["end_time"]), detail, order, exhaustedAll && pct >= 100));
+                        order++;
+                    }
+                }
+            }
+            return Tuple.Create(plan, windows);
+        }
+
+        private List<string> ExtraRoots()
+        {
+            var text = Core.Settings.Str(Settings, "data_dir");
+            return text.Length > 0 ? new List<string> { text } : new List<string>();
+        }
+
         public override bool Detect()
         {
             if (Core.Settings.Str(Settings, "session_id").Length > 0) return true;
+            if (ExtraRoots().Any(Proc.SafeDirExists)) return true;
             return AppFolders.Any(f => Proc.AppRoots(f).Count > 0);
         }
 
@@ -100,10 +165,12 @@ namespace QuotaTray.Providers
             var manual = Core.Settings.Str(Settings, "session_id");
             if (manual.Length > 0) return Tuple.Create(manual, new List<string> { "using session_id from config.json" });
             if (!Proc.IsWindows) return Tuple.Create((string)null, new List<string> { "reading the Doubao cookie is Windows-only" });
+            var extra = ExtraRoots();
             var notes = new List<string>();
-            foreach (var folder in AppFolders)
+            for (var i = 0; i < AppFolders.Length; i++)
             {
-                var got = ChromiumCookies.GetCookies(folder, "doubao.com", "sessionid");
+                // The configured portable folder only needs searching once.
+                var got = ChromiumCookies.GetCookies(AppFolders[i], "doubao.com", "sessionid", i == 0 ? extra : null);
                 notes.AddRange(got.Item2);
                 if (got.Item1.TryGetValue("sessionid", out var key) && !string.IsNullOrEmpty(key))
                     return Tuple.Create(key, notes);
@@ -157,7 +224,11 @@ namespace QuotaTray.Providers
                 return;
             }
             var parsed = ParseProfile(payload);
-            if (parsed.Item1 == null && parsed.Item2 == null)
+            // The subscription overview adds the plan name and the window-limit
+            // usage; best effort (Doubao's web signing may reject our call).
+            var overview = Overview(session.Item1, result);
+            var plan = overview.Item1 ?? parsed.Item2;
+            if (parsed.Item1 == null && plan == null && overview.Item2.Count == 0)
             {
                 result.Attempts.Add(new SourceAttempt("Doubao profile", false, "no account in response: " + Short(resp.Text, 160)));
                 result.Status = "signed in, but Doubao returned no account";
@@ -165,13 +236,52 @@ namespace QuotaTray.Providers
             }
             result.Ok = true;
             result.Account = parsed.Item1;
-            result.Plan = parsed.Item2;
+            result.Plan = plan;
             result.Info = parsed.Item3;
-            result.Headline = parsed.Item2 ?? "signed in";
-            result.Source = "www.doubao.com/alice/profile/self";
-            result.Status = parsed.Item3.Count == 0 ? "connected (Doubao shows usage only in its own \u914d\u989d\u4e2d\u5fc3)" : "connected";
+            result.Windows = overview.Item2;
+            result.Headline = plan ?? "signed in";
+            result.Source = "www.doubao.com/alice/commerce/sale/subscription/overview";
+            result.Status = overview.Item2.Count > 0 ? "connected" : "connected (open Doubao's \u914d\u989d\u4e2d\u5fc3 for usage)";
             result.DataTime = Time.Now;
-            result.Attempts.Add(new SourceAttempt("Doubao profile", true, parsed.Item1 ?? parsed.Item2 ?? "signed in"));
+            result.Attempts.Add(new SourceAttempt("Doubao profile", true, parsed.Item1 ?? plan ?? "signed in"));
+        }
+
+        /// <summary>Plan and window-limit usage, best effort. Never throws.</summary>
+        private Tuple<string, List<QuotaWindow>> Overview(string sessionKey, ProviderResult result)
+        {
+            var none = Tuple.Create((string)null, new List<QuotaWindow>());
+            var req = new HttpRequest { Method = "POST", Url = Http.Query(OverviewUrl, OverviewParams),
+                Body = "{\"product_line\":\"membership\"}", TimeoutSeconds = 20 };
+            req.Headers["Cookie"] = "sessionid=" + sessionKey;
+            req.Headers["Accept"] = "application/json, text/plain, */*";
+            req.Headers["Content-Type"] = "application/json";
+            req.Headers["agw-js-conv"] = "str";
+            req.Headers["Referer"] = "https://www.doubao.com/chat/";
+            req.Headers["User-Agent"] = BrowserUa;
+            HttpReply resp;
+            try { resp = Http.Send(req); }
+            catch (Exception e)
+            {
+                result.Attempts.Add(new SourceAttempt("Doubao overview", false, "request failed: " + e.Message));
+                return none;
+            }
+            if (resp.Status >= 400)
+            {
+                result.Attempts.Add(new SourceAttempt("Doubao overview", false, $"HTTP {resp.Status}"));
+                return none;
+            }
+            var payload = Json.ParseObject(resp.Text);
+            var code = payload?.Num("code");
+            if (payload == null || (code != null && code.Value != 0))
+            {
+                result.Attempts.Add(new SourceAttempt("Doubao overview", false,
+                    payload == null ? "response was not JSON" : $"code {(int)code.Value}: {Short(payload.Str("msg") ?? payload.Str("message") ?? "", 120)}"));
+                return none;
+            }
+            var parsed = ParseOverview(payload);
+            result.Attempts.Add(new SourceAttempt("Doubao overview", true,
+                $"{parsed.Item2.Count} window(s)" + (parsed.Item1 != null ? ", " + parsed.Item1 : "")));
+            return parsed;
         }
     }
 }
