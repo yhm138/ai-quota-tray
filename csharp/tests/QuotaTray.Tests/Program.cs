@@ -386,6 +386,27 @@ namespace QuotaTray.Tests
                 var pcfg = new Config(J("{\"providers\":{\"doubao\":{\"data_dir\":\"" + portable.Replace("\\", "\\\\") + "\"}}}"));
                 Check("doubao detects a portable data_dir", new DoubaoProvider(pcfg).Detect());
             }
+            // Optional browser scan: a doubao.com cookie in an Edge "Profile 1".
+            {
+                var browserHome = Path.Combine(Path.GetTempPath(), "qt-browser-" + Guid.NewGuid().ToString("N"));
+                var edge = Path.Combine(browserHome, "Microsoft", "Edge", "User Data");
+                var eprof = Path.Combine(edge, "Profile 1", "Network");
+                Directory.CreateDirectory(eprof);
+                File.WriteAllText(Path.Combine(eprof, "Cookies"), "x");
+                var oldLocal = Environment.GetEnvironmentVariable("LOCALAPPDATA");
+                Environment.SetEnvironmentVariable("LOCALAPPDATA", browserHome);
+                try
+                {
+                    Check("BrowserRoots finds Edge user-data", Proc.BrowserRoots().Contains(edge), string.Join("|", Proc.BrowserRoots()));
+                    var edbs = ChromiumCookies.FindCookieDbs(edge);
+                    Check("Profile */ cookie DB found", edbs.Any(p => p.EndsWith(Path.Combine("Profile 1", "Network", "Cookies"))), string.Join("|", edbs));
+                    var onCfg = new Config(J("{\"providers\":{\"doubao\":{\"scan_browsers\":true}}}"));
+                    Check("doubao scan_browsers adds Edge root", new DoubaoProvider(onCfg).Detect());
+                    var offCfg = new Config(J("{\"providers\":{\"doubao\":{\"scan_browsers\":false}}}"));
+                    Check("doubao without scan_browsers ignores browsers", !new DoubaoProvider(offCfg).Detect() || Proc.AppRoots("Doubao").Count > 0);
+                }
+                finally { Environment.SetEnvironmentVariable("LOCALAPPDATA", oldLocal); }
+            }
 
             var dprof = DoubaoProvider.ParseProfile(J("{\"data\":{\"profile_brief\":{\"nickname\":\"\\u5c0f\\u8c46\",\"user_name\":\"doubao_user\",\"id\":42,\"vip_type\":2}}}"));
             Check("doubao: account and plan from profile", dprof.Item1 == "\u5c0f\u8c46" && dprof.Item2 == "Pro", dprof.Item1 + "/" + dprof.Item2);

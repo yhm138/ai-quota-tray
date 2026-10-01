@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.8.0
+
+- **Doubao can read the `doubao.com` cookie from your browser.** Turn on
+  `doubao.scan_browsers` in the config and QuotaTray also looks for the
+  `sessionid` cookie in Edge, Chrome, Brave, Chromium, Vivaldi and Opera
+  (every profile), not just the Doubao desktop app. Off by default. Note:
+  recent browser versions seal the cookie with App-Bound encryption, which
+  cannot be read from outside the browser; where that applies the cookie is
+  skipped and you can still paste `session_id` instead. The Chromium cookie
+  reader now also walks `Profile 1`, `Profile 2`, ... profiles
+
 ## v1.7.0
 
 - **Doubao now shows real usage bars.** The card reads Doubao's subscription

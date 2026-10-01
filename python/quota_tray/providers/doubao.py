@@ -156,9 +156,17 @@ class DoubaoProvider(Provider):
     name = "Doubao"
 
     def _extra_roots(self) -> list[str]:
-        """A portable install's folder, from config (data_dir)."""
+        """Extra cookie-store roots: a portable install (data_dir), and the
+        Chromium browsers' user-data dirs when scan_browsers is on."""
+        roots: list[str] = []
         text = (self.settings.get("data_dir") or "").strip()
-        return [text] if text else []
+        if text:
+            roots.append(text)
+        if self.settings.get("scan_browsers"):
+            from ..win.chromium_cookies import browser_roots
+
+            roots += [str(p) for p in browser_roots()]
+        return roots
 
     def detect(self) -> bool:
         if (self.settings.get("session_id") or "").strip():

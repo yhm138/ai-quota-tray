@@ -292,9 +292,13 @@ the card still shows the account and plan.
 - **Portable install?** Set `doubao.data_dir` in config.json to the folder that
   holds the app's cookie store (the portable install folder, or its `User Data`
   subfolder).
-- **Card can't read the cookie?** Recent Doubao builds encrypt cookies with
-  App-Bound encryption, which QuotaTray cannot decrypt. Copy the `sessionid`
-  value from the app and paste it into `doubao.session_id` in config.json.
+- **Use the browser instead of the app?** Set `doubao.scan_browsers` to `true`
+  and QuotaTray also reads the `doubao.com` cookie from Edge, Chrome, Brave,
+  Chromium, Vivaldi and Opera (every profile). Off by default.
+- **Card can't read the cookie?** Recent Doubao *and browser* builds encrypt
+  cookies with App-Bound encryption, which QuotaTray cannot decrypt from
+  outside. Copy the `sessionid` value and paste it into `doubao.session_id` in
+  config.json.
 
 ### DeepSeek (pay as you go)
 
@@ -633,7 +637,8 @@ TRAE 把它的 Cloud-IDE JWT 存在 `%APPDATA%\Trae CN\User\globalStorage\storag
 豆包桌面客户端是 www.doubao.com 的 Electron 应用。QuotaTray 从它的 cookie 库里读 `sessionid` cookie（和 Claude Desktop 一样的 OSCrypt/DPAPI + AES-GCM 方案），调 `/alice/profile/self` 拿登录账号，再调订阅 overview 接口（`/alice/commerce/sale/subscription/overview`）拿套餐和**窗口额度用量**——一个 5 小时窗口和一个每周窗口，和 Claude 的窗口一样。overview 是尽力而为：如果豆包的网页签名拒绝了请求，卡片仍会显示账号和套餐。
 
 - **便携版（Portable）？** 在 config.json 里把 `doubao.data_dir` 设成存放 cookie 库的文件夹（便携版安装目录，或其下的 `User Data` 子目录）。
-- **读不到 cookie？** 新版豆包用 App-Bound 加密 cookie，QuotaTray 无法解密。把应用里的 `sessionid` 值复制出来，填到 config.json 的 `doubao.session_id` 即可。
+- **想用浏览器而不是客户端？** 把 `doubao.scan_browsers` 设成 `true`，QuotaTray 也会从 Edge、Chrome、Brave、Chromium、Vivaldi、Opera（所有 profile）里读 `doubao.com` 的 cookie。默认关闭。
+- **读不到 cookie？** 新版豆包**和浏览器**都用 App-Bound 加密 cookie，QuotaTray 无法从外部解密。把 `sessionid` 值复制出来，填到 config.json 的 `doubao.session_id` 即可。
 
 ### DeepSeek（按量计费）
 

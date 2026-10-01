@@ -43,6 +43,21 @@ namespace QuotaTray.Win
             // with the cookie store under a "Default" profile folder.
             Add(Path.Combine(root, "Default", "Network", "Cookies"));
             Add(Path.Combine(root, "Default", "Cookies"));
+            // Browser profiles: Default (above) plus "Profile 1", "Profile 2", ...
+            try
+            {
+                if (Directory.Exists(root))
+                    foreach (var dir in Directory.GetDirectories(root))
+                    {
+                        var leaf = Path.GetFileName(dir);
+                        if (leaf != null && leaf.StartsWith("Profile ", StringComparison.Ordinal))
+                        {
+                            Add(Path.Combine(dir, "Network", "Cookies"));
+                            Add(Path.Combine(dir, "Cookies"));
+                        }
+                    }
+            }
+            catch (Exception) { }
             foreach (var pattern in new[] { Path.Combine("Partitions", "*", "Network", "Cookies"),
                                             Path.Combine("Partitions", "*", "Cookies") })
             {

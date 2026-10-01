@@ -69,6 +69,53 @@ def app_roots(app_folder: str, extra: list | None = None) -> list[Path]:
     return out
 
 
+def browser_roots() -> list[Path]:
+    """User-data dirs of the common Chromium browsers that exist on this box.
+
+    Edge, Chrome, Brave, Chromium, Vivaldi and Opera all keep cookies in the
+    same `<profile>/Network/Cookies` SQLite DB with the OSCrypt key in the
+    user-data dir's "Local State" -- the same scheme as an Electron app. (Recent
+    browser versions seal the key with App-Bound encryption, which cannot be
+    read from outside the browser; those cookies are skipped.)
+    """
+    out: list[Path] = []
+    local = os.environ.get("LOCALAPPDATA")
+    appdata = os.environ.get("APPDATA")
+    specs: list[Path] = []
+    if local:
+        base = Path(local)
+        specs += [
+            base / "Microsoft" / "Edge" / "User Data",
+            base / "Google" / "Chrome" / "User Data",
+            base / "Google" / "Chrome Beta" / "User Data",
+            base / "BraveSoftware" / "Brave-Browser" / "User Data",
+            base / "Chromium" / "User Data",
+            base / "Vivaldi" / "User Data",
+        ]
+    if appdata:
+        specs.append(Path(appdata) / "Opera Software" / "Opera Stable")
+    if sys.platform == "darwin":
+        support = Path.home() / "Library" / "Application Support"
+        specs += [support / "Microsoft Edge", support / "Google" / "Chrome",
+                  support / "BraveSoftware" / "Brave-Browser", support / "Chromium"]
+    else:
+        cfg = Path.home() / ".config"
+        specs += [cfg / "microsoft-edge", cfg / "google-chrome",
+                  cfg / "BraveSoftware" / "Brave-Browser", cfg / "chromium"]
+    seen: set[str] = set()
+    for p in specs:
+        try:
+            if not p.is_dir():
+                continue
+        except OSError:
+            continue
+        key = os.path.normcase(str(p))
+        if key not in seen:
+            seen.add(key)
+            out.append(p)
+    return out
+
+
 def find_cookie_dbs(root: Path, limit: int = 8) -> list[Path]:
     """Find every Cookies file under the app data dir (including partitions),
     newest first."""
@@ -79,9 +126,11 @@ def find_cookie_dbs(root: Path, limit: int = 8) -> list[Path]:
         # with the cookie store under a "Default" profile folder.
         root / "Default" / "Network" / "Cookies", root / "Default" / "Cookies",
     ]
-    # Session partitions (webviews) keep their own cookie jars. A full rglob
-    # over the app dir is avoided: Claude Desktop keeps large VM bundles there.
-    for pattern in ("Partitions/*/Network/Cookies", "Partitions/*/Cookies"):
+    # Browser profiles (Default is already covered above) and session
+    # partitions (webviews) keep their own cookie jars. A full rglob over the
+    # app dir is avoided: Claude Desktop keeps large VM bundles there.
+    for pattern in ("Profile */Network/Cookies", "Profile */Cookies",
+                    "Partitions/*/Network/Cookies", "Partitions/*/Cookies"):
         try:
             candidates.extend(root.glob(pattern))
         except OSError:

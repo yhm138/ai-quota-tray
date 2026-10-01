@@ -147,6 +147,37 @@ namespace QuotaTray.Win
             return roots.Where(SafeDirExists).Where(r => seen.Add(Path.GetFullPath(r))).ToList();
         }
 
+        /// <summary>User-data dirs of the common Chromium browsers that exist here.</summary>
+        public static List<string> BrowserRoots()
+        {
+            var specs = new List<string>();
+            var local = Environment.GetEnvironmentVariable("LOCALAPPDATA");
+            var appdata = Environment.GetEnvironmentVariable("APPDATA");
+            if (!string.IsNullOrEmpty(local))
+                specs.AddRange(new[]
+                {
+                    Path.Combine(local, "Microsoft", "Edge", "User Data"),
+                    Path.Combine(local, "Google", "Chrome", "User Data"),
+                    Path.Combine(local, "Google", "Chrome Beta", "User Data"),
+                    Path.Combine(local, "BraveSoftware", "Brave-Browser", "User Data"),
+                    Path.Combine(local, "Chromium", "User Data"),
+                    Path.Combine(local, "Vivaldi", "User Data"),
+                });
+            if (!string.IsNullOrEmpty(appdata))
+                specs.Add(Path.Combine(appdata, "Opera Software", "Opera Stable"));
+            if (!IsWindows)
+            {
+                var cfg = Path.Combine(Paths.Home, ".config");
+                specs.AddRange(new[]
+                {
+                    Path.Combine(cfg, "microsoft-edge"), Path.Combine(cfg, "google-chrome"),
+                    Path.Combine(cfg, "BraveSoftware", "Brave-Browser"), Path.Combine(cfg, "chromium"),
+                });
+            }
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            return specs.Where(SafeDirExists).Where(p => seen.Add(Path.GetFullPath(p))).ToList();
+        }
+
         public static bool SafeDirExists(string p)
         {
             try { return Directory.Exists(p); } catch (Exception) { return false; }
