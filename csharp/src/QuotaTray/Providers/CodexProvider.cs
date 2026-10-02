@@ -393,6 +393,10 @@ namespace QuotaTray.Providers
             var rows = new List<InfoRow>();
             if (plan != null) rows.Add(new InfoRow("Plan", plan));
 
+            // The login token also carries when the active subscription started; it
+            // may be the current billing period's start, so it is shown as "since".
+            var started = Time.Parse(auth["chatgpt_subscription_active_start"]);
+            var since = started != null && started <= Time.Now ? $"since {Account.FmtDate(started)} \u00b7 " : "";
             var until = Time.Parse(subscription["active_until"]);
             if (until != null)
             {
@@ -400,15 +404,15 @@ namespace QuotaTray.Providers
                 if (subscription.Truthy("is_delinquent"))
                     rows.Add(new InfoRow("Subscription", $"payment problem \u00b7 paid until {Account.FmtDate(until)}", "warn"));
                 else if (subscription.Bool("will_renew") == false)
-                    rows.Add(new InfoRow("Subscription", $"ends {Account.FmtDate(until)} (won't renew)", Account.Soon(until, 7) ? "warn" : ""));
+                    rows.Add(new InfoRow("Subscription", $"{since}ends {Account.FmtDate(until)} (won't renew)", Account.Soon(until, 7) ? "warn" : ""));
                 else
-                    rows.Add(new InfoRow("Subscription", $"renews {Account.FmtDate(until)}" + (period != null ? $" ({period})" : "")));
+                    rows.Add(new InfoRow("Subscription", $"{since}renews {Account.FmtDate(until)}" + (period != null ? $" ({period})" : "")));
             }
             else
             {
                 var claimed = Time.Parse(auth["chatgpt_subscription_active_until"]);
                 if (claimed != null)
-                    rows.Add(new InfoRow("Subscription", $"active until {Account.FmtDate(claimed)} (from the login token, may be stale)"));
+                    rows.Add(new InfoRow("Subscription", $"{since}active until {Account.FmtDate(claimed)} (from the login token, may be stale)"));
             }
 
             var credits = usage.Obj("credits");

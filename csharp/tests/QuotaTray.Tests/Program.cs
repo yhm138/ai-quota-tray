@@ -163,6 +163,15 @@ namespace QuotaTray.Tests
             Check("codex plan and renewal", ai.Item1 == "Pro Lite" && vals["Subscription"].StartsWith("renews") && vals["Subscription"].Contains("(monthly)"));
             Check("codex credits in dollars", vals.TryGetValue("Credits", out var cr) && cr == "1,026 left (~$41.04)", cr);
             Check("codex spend limit", vals.TryGetValue("Spend limit", out var sl) && sl.StartsWith("502 of 2,500 credits"), sl);
+            // The login token also carries when the active subscription started.
+            var tokClaims = J($@"{{""https://api.openai.com/auth"": {{""chatgpt_subscription_active_start"": ""2026-08-23T08:00:00Z"", ""chatgpt_subscription_active_until"": ""{later}""}}}}");
+            var tokSub = CodexProvider.AccountInfo(new JObj(), new JObj(), tokClaims).Item2.First(r => r.Label == "Subscription").Value;
+            Check("codex: token start and end shown", tokSub.StartsWith("since Aug 23") && tokSub.Contains("active until"), tokSub);
+            var apiSub = CodexProvider.AccountInfo(new JObj(), sub, tokClaims).Item2.First(r => r.Label == "Subscription").Value;
+            Check("codex: start shown before the API renewal", apiSub.StartsWith("since Aug 23") && apiSub.Contains("renews"), apiSub);
+            var futClaims = J($@"{{""https://api.openai.com/auth"": {{""chatgpt_subscription_active_start"": ""2099-01-01T00:00:00Z"", ""chatgpt_subscription_active_until"": ""{later}""}}}}");
+            var futSub = CodexProvider.AccountInfo(new JObj(), new JObj(), futClaims).Item2.First(r => r.Label == "Subscription").Value;
+            Check("codex: a future start date is ignored", !futSub.Contains("since"), futSub);
             var official = J($@"{{""credits"": [
                 {{""status"": ""available"", ""expires_at"": ""{later}"", ""title"": ""Full reset (Weekly + 5 hr)"", ""description"": ""Ready to redeem""}},
                 {{""status"": ""available"", ""expires_at"": null}},
