@@ -349,21 +349,25 @@ def codex_account_info(usage: dict, subscription: dict, claims: dict) -> tuple[s
     if plan:
         rows.append(InfoRow("Plan", plan))
 
+    # The login token also carries when the active subscription started; it
+    # may be the current billing period's start, so it is shown as "since".
+    started = parse_time(auth.get("chatgpt_subscription_active_start"))
+    since = f"since {fmt_date(started)} \u00b7 " if started and started <= now_utc() else ""
     until = parse_time(subscription.get("active_until"))
     if until:
         period = subscription.get("billing_period")
         if subscription.get("is_delinquent"):
             rows.append(InfoRow("Subscription", f"payment problem \u00b7 paid until {fmt_date(until)}", "warn"))
         elif subscription.get("will_renew") is False:
-            rows.append(InfoRow("Subscription", f"ends {fmt_date(until)} (won't renew)",
+            rows.append(InfoRow("Subscription", f"{since}ends {fmt_date(until)} (won't renew)",
                                 "warn" if soon(until, 7) else ""))
         else:
-            rows.append(InfoRow("Subscription", f"renews {fmt_date(until)}"
+            rows.append(InfoRow("Subscription", f"{since}renews {fmt_date(until)}"
                                 + (f" ({period})" if isinstance(period, str) else "")))
     else:
         claimed = parse_time(auth.get("chatgpt_subscription_active_until"))
         if claimed:
-            rows.append(InfoRow("Subscription", f"active until {fmt_date(claimed)} "
+            rows.append(InfoRow("Subscription", f"{since}active until {fmt_date(claimed)} "
                                                 "(from the login token, may be stale)"))
 
     credits = usage.get("credits")

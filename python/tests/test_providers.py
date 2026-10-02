@@ -738,6 +738,23 @@ _hdr = __import__("base64").urlsafe_b64encode(json.dumps({"https://api.openai.co
     "chatgpt_plan_type": "plus", "chatgpt_subscription_active_until": later_iso}}).encode()).decode()
 plan, rows = codex.codex_account_info({}, {}, codex.jwt_claims(f"x.{_hdr.rstrip('=')}.y"))
 check("codex: login-token fallback", plan == "Plus" and "may be stale" in rows[-1].value, rows)
+check("codex: no start date when the token has none", "since" not in rows[-1].value, rows)
+# The token also carries when the active subscription started.
+_hdr2 = __import__("base64").urlsafe_b64encode(json.dumps({"https://api.openai.com/auth": {
+    "chatgpt_plan_type": "plus", "chatgpt_subscription_active_start": "2026-09-25T08:00:00Z",
+    "chatgpt_subscription_active_until": later_iso}}).encode()).decode()
+_claims2 = codex.jwt_claims(f"x.{_hdr2.rstrip('=')}.y")
+_, rows2 = codex.codex_account_info({}, {}, _claims2)
+_sub2 = {r.label: r.value for r in rows2}["Subscription"]
+check("codex: token start and end shown", _sub2.startswith("since Sep 25") and "active until" in _sub2, _sub2)
+_, rows3 = codex.codex_account_info({}, sub, _claims2)
+_sub3 = {r.label: r.value for r in rows3}["Subscription"]
+check("codex: start shown before the API renewal", _sub3.startswith("since Sep 25") and "renews" in _sub3, _sub3)
+_hdr4 = __import__("base64").urlsafe_b64encode(json.dumps({"https://api.openai.com/auth": {
+    "chatgpt_subscription_active_start": "2099-01-01T00:00:00Z",
+    "chatgpt_subscription_active_until": later_iso}}).encode()).decode()
+_, rows4 = codex.codex_account_info({}, {}, codex.jwt_claims(f"x.{_hdr4.rstrip('=')}.y"))
+check("codex: a future start date is ignored", "since" not in rows4[-1].value, rows4)
 
 # Shape from openai/codex backend-client tests (rate_limit_resets_tests.rs).
 official = {"credits": [
