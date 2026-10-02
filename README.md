@@ -1,7 +1,7 @@
 <h1 align="center">QuotaTray</h1>
 
 <p align="center">
-  Every AI coding quota you pay for, one click away in the Windows 11 tray:<br>
+  Windows 托盘小程序：一键查看 AI 编程工具的额度和 API 余额。<br>
   <b>Claude</b> · <b>Codex</b> · <b>Antigravity</b> · <b>Gemini CLI</b> · <b>TRAE</b> · <b>Doubao</b> · <b>DeepSeek</b><br>
 </p>
 
@@ -15,51 +15,51 @@
 <div align="center">
 <table>
   <tr>
-    <th>Subscriptions</th>
-    <th>Pay as you go</th>
+    <th>订阅制</th>
+    <th>按量计费</th>
   </tr>
   <tr>
     <td align="center" valign="top">
       <img src="docs/panel-subscriptions.png" alt="Subscriptions tab: Claude, Codex, Antigravity and Doubao cards with usage bars, reset times and plan details" width="320"><br>
-      <sub>Usage windows, reset times, plan and account details</sub>
+      <sub>额度窗口、重置时间、套餐与账号信息</sub>
     </td>
     <td align="center" valign="top">
       <img src="docs/panel-payg.png" alt="Pay-as-you-go tab: the DeepSeek API balance with a Copy button for the key" width="320"><br>
-      <sub>DeepSeek API balance; the key is one click from the clipboard</sub>
+      <sub>DeepSeek API 余额，支持复制 Key</sub>
     </td>
   </tr>
 </table>
 </div>
 
 
-**English** · [中文](README.zh-CN.md)
+**中文** · [English](README.en.md)
 
-## Features
+## 功能概览
 
-- View Claude, Codex, Antigravity, TRAE and Doubao usage, plus DeepSeek API balances, in one panel.
-- Track quota windows, reset countdowns, plans, credits and multiple accounts, with reminders for unused one-time resets.
-- Reuse credentials from tools already signed in on your machine; no separate QuotaTray sign-in.
-- Start with Windows, refresh from the tray menu and update in one click. The Gemini CLI card is off by default.
+- 在一个面板中查看 Claude、Codex、Antigravity、TRAE、豆包的用量，以及 DeepSeek API 余额。
+- 显示额度窗口、重置倒计时、套餐、积分和多账号；提醒尚未使用的一次性额度重置。
+- 读取本机工具已有的登录凭据，无需在 QuotaTray 内重新登录。
+- 支持 Windows 开机自启、托盘菜单刷新和一键更新。Gemini CLI 卡片默认关闭。
 
-## Quick start
+## 快速开始
 
-1. Download **`QuotaTray-<version>-csharp-windows-anycpu.exe`** from the [latest release](https://github.com/yhm138/ai-quota-tray/releases/latest). The C# edition is about 250 KB and uses .NET Framework 4.8 included with Windows 10 (1903+) / 11, supporting x64 and ARM64.
-2. Put it in a permanent folder, such as `C:\Tools\QuotaTray\`, then double-click it. The first launch records this path for run-at-login.
-3. Click the notification-area icon to open the panel; check the taskbar's `^` menu if it is hidden. Sign in to the corresponding tools first, and keep Antigravity open to read its quota.
+1. 从 [最新 Release](https://github.com/yhm138/ai-quota-tray/releases/latest) 下载 **`QuotaTray-<版本>-csharp-windows-anycpu.exe`**。C# 版约 250 KB，使用 Windows 10（1903+）/11 自带的 .NET Framework 4.8，支持 x64 和 ARM64。
+2. 将文件放到固定位置（例如 `C:\Tools\QuotaTray\`），再双击运行。首次启动会记录开机自启路径。
+3. 点击通知区域中的图标打开面板；若看不到图标，展开任务栏的 `^` 菜单。请先在对应工具中完成登录；Antigravity 需要保持 IDE 运行。
 
-The Python edition comes as a single-file exe or portable zip and retains extra Claude cookie and Codex SQLite fallbacks. Both editions share settings in `%APPDATA%\QuotaTray`; only one instance runs at a time.
+Python 版提供单文件 exe 和便携 zip，保留额外的 Claude cookie 与 Codex SQLite 兜底路径。两个版本共用 `%APPDATA%\QuotaTray` 设置，同一时间只运行一个实例。
 
-Release binaries are unsigned and may be flagged by antivirus software. Compare downloads with the SHA256 file from the same release. See the [user guide](docs/user-guide.md#install) for download choices, verification and source installation.
+Release 二进制未签名，可能被杀软拦截。安装前可核对同一 Release 的 SHA256 校验文件；详细下载选择、校验及源码安装见 [使用指南](docs/user-guide.md#安装)。
 
-## Documentation
+## 文档导航
 
-| Guide | Contents |
+| 文档 | 内容 |
 |---|---|
-| [User guide](docs/user-guide.md) | Installation, plans and resets, updates, configuration, troubleshooting, privacy and limitations |
-| [Data sources](docs/providers.md) | Credential locations, quota endpoints, fallback order and provider-specific settings |
-| [Development guide](docs/development.md) | Prerequisites, repository layout, edition differences, scripts, tests and releases |
-| [Changelog](CHANGELOG.md) | Changes by version |
+| [使用指南](docs/user-guide.md) | 安装、套餐与重置、更新、配置、排错、隐私和已知限制 |
+| [数据来源](docs/providers.md) | 各产品的凭据位置、查询接口、兜底顺序和特殊设置 |
+| [开发指南](docs/development.md) | 环境准备、仓库结构、版本差异、脚本、测试与发布 |
+| [更新记录](CHANGELOG.md) | 各版本的变更 |
 
-## License
+## 许可证
 
-MIT — see [LICENSE](LICENSE).
+MIT，见 [LICENSE](LICENSE)。
