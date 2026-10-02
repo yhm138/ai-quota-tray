@@ -21,7 +21,7 @@ def main() -> int:
         return 2
 
     changed = []
-    for name in ("README.md",):
+    for name in ("README.md", "README.en.md"):
         path = ROOT / name
         if not path.is_file():
             continue
