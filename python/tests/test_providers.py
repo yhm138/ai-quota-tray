@@ -1212,8 +1212,9 @@ _auth_doc = {"accessToken": "trae-jwt-123", "email": "me@trae.cn"}
 _blob = __import__("base64").b64encode(_trae_encrypt(json.dumps(_auth_doc).encode())).decode()
 check("trae: byte-crypto round trip", trae.byte_crypto_decrypt(__import__("base64").b64decode(_blob)) is not None
       and json.loads(trae.byte_crypto_decrypt(__import__("base64").b64decode(_blob))) == _auth_doc)
+_raw = __import__("base64").b64decode(_blob)
 check("trae: tampered blob rejected",
-      trae.byte_crypto_decrypt(__import__("base64").b64decode(_blob)[:-1] + b"\x00") is None)
+      trae.byte_crypto_decrypt(_raw[:-1] + bytes([_raw[-1] ^ 1])) is None)
 
 _store = Path(tempfile.mkdtemp()) / "storage.json"
 _store.write_text(json.dumps({"iCubeAuthInfo://icube.cloudide": _blob,
