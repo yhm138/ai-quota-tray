@@ -1,11 +1,13 @@
 # Changelog
 
-## Unreleased
+## v1.8.5
 
 - **Codex card shows when the subscription started.** The Subscription row
   now reads, for example, "since Sep 25 · active until Oct 25", using the
   start date the Codex login token carries next to the end date it was
   already showing. Shown only when the token has it.
+- **Flaky TRAE test fixed.** The tampered-blob test no longer passes an
+  unchanged blob once in 256 runs.
 
 ## v1.8.4
 
