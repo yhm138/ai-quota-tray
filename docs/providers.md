@@ -10,7 +10,8 @@
 - [Gemini CLI](#gemini-cli)
 - [TRAE（Trae CN）](#traetrae-cn)
 - [豆包](#豆包)
-- [DeepSeek（按量计费）](#deepseek按量计费)
+- [OpenCode-DeepSeek-Official（按量计费）](#opencode-deepseek-official按量计费)
+- [由 Harness 管理（按量计费）](#由-harness-管理按量计费)
 
 ## Claude
 
@@ -60,9 +61,9 @@ TRAE 把它的 Cloud-IDE JWT 存在 `%APPDATA%\Trae CN\User\globalStorage\storag
 - **想用浏览器而不是客户端？** 把 `providers.doubao.scan_browsers` 设成 `true`，QuotaTray 也会从 Edge、Chrome、Brave、Chromium、Vivaldi、Opera（所有 profile）里读 `doubao.com` 的 cookie。默认关闭。
 - **读不到 cookie？** 新版豆包**和浏览器**都用 App-Bound 加密 cookie，QuotaTray 无法从外部解密。把 `sessionid` 值复制出来，填到 config.json 的 `providers.doubao.session_id` 即可。`session_id` 也支持整段 `name=value; name=value` 的 Cookie 字符串——如果单独的 `sessionid` 被拒，可以把已登录的 `www.doubao.com` 请求里的整个 Cookie 头粘进去。
 
-## DeepSeek（按量计费）
+## OpenCode-DeepSeek-Official（按量计费）
 
-DeepSeek 的 API 是预充值按量扣费，没有周期额度，所以它放在 *Pay as you go* 标签页，显示 `api.deepseek.com/user/balance` 返回的余额。Key 从已经保存它的工具里读取：
+**OpenCode-DeepSeek-Official** 卡片位于 *Pay as you go* 标签页，显示 DeepSeek 官方 API 的预充值余额，查询接口为 `api.deepseek.com/user/balance`。配置键仍为 `providers.deepseek`。卡片沿用全部 API key 来源：
 
 | 顺序 | 来源 |
 |---|---|
@@ -74,3 +75,11 @@ DeepSeek 的 API 是预充值按量扣费，没有周期额度，所以它放在
 Windows 和每个 WSL 发行版都会搜索。每个不同的 Key 单独一页（‹ › 翻页），并标明是哪个工具里的；OpenCode 和 dsh 用的是同一个 Key 时合并成一页。每页都有一行 *API key*：鼠标停在 `sk-...1234` 上显示完整 Key，点它或点 **Copy** 复制到剪贴板。
 
 **OpenCode CLI 和 OpenCode Desktop 会分别标明**。Desktop 自己的设置在 `%APPDATA%\ai.opencode.desktop`，但它内部启动的 OpenCode 服务读的是和 CLI **同一个** `auth.json`，所以在 Windows 上两者用的一定是同一个 Key，两个都装了时页面标为 *OpenCode CLI + OpenCode Desktop*。只有 WSL 里的才会不同：发行版里的 CLI 用那个发行版自己的 `auth.json`，Desktop 在 WSL 里启动的服务也一样（标为 *OpenCode Desktop - WSL Ubuntu*）。Diagnostics 里会列出各自在哪里找到。Key 只会发给 `api.deepseek.com`；工具里配置成走中转（自定义 base URL）的 Key 不会被使用。
+
+## 由 Harness 管理（按量计费）
+
+Python 和 C# 版都会在 *Pay as you go* 标签页单独显示 **“由 Harness 管理”** 卡片，用于 DeepSeek Harness（DSH）托管账户。卡片分别显示充值余额、赠送余额，并按币种合计，不跨币种相加。上面的 **OpenCode-DeepSeek-Official** 自备 API key 卡片继续独立显示。
+
+QuotaTray 读取 DSH 的 `.credentials.yaml` 中 `records.deepseek-account-platform/default` 登录记录，查询固定的官方接口 `https://platform.deepseek.com/api/v0/users/get_user_summary`。请求方式和余额字段依据 [DSH 官方源码 details.ts（固定版本）](https://github.com/deepseek-ai/deepseek-harness/blob/687f282e8625c6b8d11ff58211a90524be2e4317/packages/credentials/deepseek-account-platform/src/details.ts)。默认使用 `DSH_HOME`，未设置时使用 `~/.dsh`，也会搜索 WSL 中的 DSH 登录。可通过 `providers.dsh_managed.home` 指定其他 DSH 目录，或将 `scan_wsl` 设为 `false` 关闭 WSL 搜索；完整字段见 [配置](user-guide.md#配置)。
+
+先在 Harness 中登录即可使用。登录失效时，在 Harness 中重新登录，再刷新 QuotaTray。无需复制 API key 或登录令牌；令牌只用于查询，不显示在卡片中，也不写入缓存或日志。

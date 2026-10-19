@@ -715,6 +715,189 @@ namespace QuotaTray.Tests
             var nr = new DeepSeekProvider(new Config()).Fetch();
             Check("deepseek: no key, not installed", !nr.Ok && !nr.Installed);
 
+            Console.WriteLine("--- Harness managed ---");
+            const string managedToken = "synthetic-managed-grant-A";
+            const string managedToken2 = "synthetic-managed-grant-B";
+            string ManagedGrant(string token, string issuer = DshManagedProvider.Issuer) =>
+                "{\"version\":1,\"records\":{\"deepseek-account-platform/default\":{\"kind\":\"grant\",\"payload\":{\"version\":1,\"token\":"
+                + Json.Write(token) + ",\"issuer\":" + Json.Write(issuer) + "}}}}";
+            var managedYaml = "version: 1\nrefs:\n  DEEPSEEK_API_KEY: synthetic-api-key\nrecords:\n"
+                + "  other/default:\n    kind: grant\n    payload:\n      token: synthetic-decoy\n"
+                + "  deepseek-account-platform/default:\n    kind: grant\n    payload:\n      version: 1\n"
+                + "      token: '" + managedToken + "' # grant value\n      issuer: \"https://platform.deepseek.com\"\n";
+            Check("managed: exact grant from JSON", DshManagedProvider.CredentialToken(ManagedGrant(managedToken)) == managedToken);
+            Check("managed: duplicate JSON grant members rejected", DshManagedProvider.CredentialToken(
+                ManagedGrant(managedToken).Replace("\"issuer\":", "\"issuer\":\"https://other.test\",\"issuer\":")) == null);
+            Check("managed: escaped duplicate JSON member names rejected", DshManagedProvider.CredentialToken(
+                ManagedGrant(managedToken).Replace("\"issuer\":", "\"iss\\u0075er\":\"https://other.test\",\"issuer\":")) == null);
+            Check("managed: YAML grant does not confuse refs or other records", DshManagedProvider.CredentialToken(managedYaml) == managedToken);
+            var opaqueManagedYaml = managedYaml.Replace("  other/default:\n    kind: grant\n    payload:\n      token: synthetic-decoy\n",
+                "  other/default:\n    kind: grant\n    payload:\n      tagged: !opaque\n        - item one\n        - item two\n      note: |\n        Synthetic multi-line opaque plugin data.\n        token: not-the-selected-grant\n");
+            Check("managed: unrelated YAML plugin payloads remain opaque", DshManagedProvider.CredentialToken(opaqueManagedYaml) == managedToken);
+            Check("managed: quoted record key", DshManagedProvider.CredentialToken(managedYaml.Replace("  deepseek-account-platform/default:", "  'deepseek-account-platform/default':")) == managedToken);
+            Check("managed: grant issuer is exact official origin", new[]
+                { "https://platform.deepseek.com/", "http://platform.deepseek.com", "https://platform.deepseek.com.evil.test", "https://other.test" }
+                .All(issuer => DshManagedProvider.CredentialToken(ManagedGrant(managedToken, issuer)) == null));
+            Check("managed: token must be nonempty printable ASCII without spaces", new[] { "", "two words", "x\ninjected", "x\ttab", "\u4e2d\u6587", "x\u007f" }
+                .All(token => DshManagedProvider.CredentialToken(ManagedGrant(token)) == null));
+            Check("managed: no grant from another credential kind or record path",
+                DshManagedProvider.CredentialToken(ManagedGrant(managedToken).Replace("\"kind\":\"grant\"", "\"kind\":\"api-key\"")) == null
+                && DshManagedProvider.CredentialToken(ManagedGrant(managedToken).Replace("deepseek-account-platform/default", "other/default")) == null
+                && DshManagedProvider.CredentialToken("version: 1\nrefs:\n  DEEPSEEK_API_KEY: synthetic-api-key\n") == null);
+            Check("managed: both document and payload versions are checked",
+                DshManagedProvider.CredentialToken(ManagedGrant(managedToken).Replace("\"version\":1", "\"version\":2")) == null
+                && DshManagedProvider.CredentialToken(ManagedGrant(managedToken).Replace("\"version\":1", "\"version\":true")) == null
+                && DshManagedProvider.CredentialToken(ManagedGrant(managedToken).Replace("\"version\":1", "\"version\":\"1\"")) == null);
+            Check("managed: malformed YAML and duplicate credential fields rejected",
+                DshManagedProvider.CredentialToken(managedYaml.Replace("      token:", "        token:")) == null
+                && DshManagedProvider.CredentialToken(managedYaml + "      issuer: https://other.test\n") == null
+                && DshManagedProvider.CredentialToken(managedYaml.Replace("'" + managedToken + "'", "*alias")) == null);
+
+            string ManagedWallets(string normal, string bonus) =>
+                "{\"code\":0,\"data\":{\"biz_code\":0,\"biz_data\":{\"normal_wallets\":" + normal + ",\"bonus_wallets\":" + bonus + "}}}";
+            var managedWalletJson = ManagedWallets(
+                "[{\"currency\":\"USD\",\"balance\":\"2.5\"},{\"currency\":\"CNY\",\"balance\":\"5.\"},{\"currency\":\"CNY\",\"balance\":\".5\"}]",
+                "[{\"currency\":\"CNY\",\"balance\":\"1.25\"},{\"currency\":\"USD\",\"balance\":\"0E-16\"}]");
+            var managedRows = DshManagedProvider.BalanceRows(J(managedWalletJson), 5);
+            Check("managed: per-currency wallets add without currency mixing", managedRows != null
+                && managedRows.Item2 == "\u00a56.75 / $2.50" && managedRows.Item1.Count == 6);
+            Check("managed: normal and bonus wallets are shown separately", managedRows.Item1[1].Label == "Topped up"
+                && managedRows.Item1[1].Value == "\u00a55.50" && managedRows.Item1[2].Label == "Granted"
+                && managedRows.Item1[2].Value == "\u00a51.25 (can expire)");
+            Check("managed: low balance tone is per currency", managedRows.Item1[0].Tone == "good" && managedRows.Item1[3].Tone == "warn");
+            Check("managed: invalid low-balance thresholds fall back to five", new[] { double.NaN, double.PositiveInfinity, -1.0, double.MaxValue }
+                .All(threshold => DshManagedProvider.BalanceRows(J(managedWalletJson), threshold).Item1[0].Tone == "good"
+                    && DshManagedProvider.BalanceRows(J(managedWalletJson), threshold).Item1[3].Tone == "warn"));
+            var zeroManaged = DshManagedProvider.BalanceRows(J(ManagedWallets("[{\"currency\":\"CNY\",\"balance\":\"0E-16\"}]", "[]")), 5);
+            Check("managed: zero is a valid known balance", zeroManaged != null && zeroManaged.Item2 == "\u00a50.00" && zeroManaged.Item1[0].Tone == "warn");
+            var roundManaged = DshManagedProvider.BalanceRows(J(ManagedWallets("[{\"currency\":\"CNY\",\"balance\":\"1.005\"}]", "[]")), 5);
+            Check("managed: positive currency display truncates like Harness", roundManaged != null && roundManaged.Item2 == "\u00a51.00");
+            var managedFormats = new[]
+            {
+                Tuple.Create("12.345", "\u00a512.34"), Tuple.Create(".001", "<\u00a50.01"),
+                Tuple.Create("-.001", "-\u00a50.01"), Tuple.Create("-12.345", "-\u00a512.35"),
+                Tuple.Create("1234.567", "\u00a51,234.56"), Tuple.Create("-0", "\u00a50.00")
+            };
+            Check("managed: small and negative amounts match Harness formatting", managedFormats.All(item =>
+                DshManagedProvider.BalanceRows(J(ManagedWallets("[{\"currency\":\"CNY\",\"balance\":" + Json.Write(item.Item1) + "}]", "[]")), 5).Item2 == item.Item2));
+            Check("managed: exact sum is formatted only after aggregation", DshManagedProvider.BalanceRows(J(ManagedWallets(
+                "[{\"currency\":\"CNY\",\"balance\":\"12.345\"}]", "[{\"currency\":\"CNY\",\"balance\":\"2.5\"}]")), 5).Item2 == "\u00a514.84");
+            var badBalances = new object[] { true, 5, null, "", "NaN", "Infinity", "1,000", "+1", " 1", "1\n", "1e100", "1e-100" };
+            Check("managed: malformed balance never becomes zero", badBalances.All(value =>
+                DshManagedProvider.BalanceRows(J(ManagedWallets("[{\"currency\":\"CNY\",\"balance\":" + Json.Write(value) + "}]", "[]")), 5) == null));
+            Check("managed: invalid wallet rejects the complete page", DshManagedProvider.BalanceRows(J(ManagedWallets(
+                "[{\"currency\":\"CNY\",\"balance\":\"20\"},{\"currency\":\"CNY\",\"balance\":\"bad\"}]", "[]")), 5) == null);
+            Check("managed: wallet schema requires both arrays and supported currency",
+                DshManagedProvider.BalanceRows(J(ManagedWallets("[]", "[]")), 5) == null
+                && DshManagedProvider.BalanceRows(J(ManagedWallets("[{\"currency\":\"EUR\",\"balance\":\"1\"}]", "[]")), 5) == null
+                && DshManagedProvider.BalanceRows(J(ManagedWallets("[{\"currency\":\"CNY\",\"balance\":\"1\"}]", "null")), 5) == null
+                && DshManagedProvider.BalanceRows(J(ManagedWallets("[true]", "[]")), 5) == null);
+            Check("managed: envelope codes must be numeric integers",
+                DshManagedProvider.BalanceRows(J(managedWalletJson.Replace("\"code\":0", "\"code\":false")), 5) == null
+                && DshManagedProvider.BalanceRows(J(managedWalletJson.Replace("\"biz_code\":0", "\"biz_code\":\"0\"")), 5) == null
+                && DshManagedProvider.BalanceRows(J(managedWalletJson.Replace("\"code\":0", "\"code\":0.5")), 5) == null);
+
+            var managedHome = Path.Combine(Paths.AppDir, "managed-home");
+            var managedWsl = Path.Combine(Paths.AppDir, "managed-wsl");
+            var managedWsl2 = Path.Combine(Paths.AppDir, "managed-wsl2");
+            foreach (var homeDir in new[] { managedHome, managedWsl, managedWsl2 }) Directory.CreateDirectory(Path.Combine(homeDir, ".dsh"));
+            var managedPath = Path.Combine(managedHome, ".dsh", ".credentials.yaml");
+            File.WriteAllText(managedPath, managedYaml);
+            File.WriteAllText(Path.Combine(managedWsl, ".dsh", ".credentials.yaml"), ManagedGrant(managedToken));
+            File.WriteAllText(Path.Combine(managedWsl2, ".dsh", ".credentials.yaml"), ManagedGrant(managedToken2));
+            DeepSeekProvider.HomesOverride = settings => new List<KeyValuePair<string, string>>
+            {
+                new KeyValuePair<string, string>(managedHome, ""),
+                new KeyValuePair<string, string>(managedWsl, "Ubuntu"),
+                new KeyValuePair<string, string>(managedWsl2, "Arch")
+            };
+            DeepSeekProvider.Env = name => null;
+            var managedRequests = new List<HttpRequest>();
+            Http.Send = request => { managedRequests.Add(request); return new HttpReply(200, managedWalletJson); };
+            var managedProvider = new DshManagedProvider(new Config());
+            var managedResult = managedProvider.Fetch();
+            Check("managed: standalone provider name and payg card", managedResult.Ok && managedResult.Installed
+                && managedResult.ProviderId == "dsh_managed" && managedResult.Name == "\u7531 Harness \u7ba1\u7406"
+                && managedResult.Billing == "payg" && managedResult.Plan == "Harness managed" && managedResult.Windows.Count == 0);
+            Check("managed: same token merged and other login becomes alternate", managedRequests.Count == 2 && managedResult.Pages().Count == 2
+                && managedResult.Label == "DeepSeek Harness + DeepSeek Harness - WSL Ubuntu" && managedResult.Alternates[0].Label == "DeepSeek Harness - WSL Arch");
+            Check("managed: fixed endpoint and safe transport", managedRequests.All(request => request.Url == DshManagedProvider.SummaryUrl
+                && request.Method == "GET" && request.Body == null && !request.FollowRedirects && !request.UseCookies && !request.Insecure && request.TimeoutSeconds == 30));
+            Check("managed: token and all desktop client headers", managedRequests.All(request =>
+                request.Headers.ContainsKey("x-dsh-auth-token") && !request.Headers.ContainsKey("Authorization")
+                && request.Headers["Accept"] == "*/*" && request.Headers["User-Agent"] == "QuotaTray/" + AppInfo.Version
+                && request.Headers["x-client-bundle-id"] == "" && request.Headers["x-client-platform"] == "desktop-win"
+                && request.Headers["x-client-version"] == AppInfo.Version && request.Headers["x-client-locale"] == "zh_CN"
+                && request.Headers["x-client-timezone-offset"] == ((int)TimeZoneInfo.Local.GetUtcOffset(Time.Now).TotalSeconds).ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            Check("managed: no token in results, diagnostics or cache", managedResult.Pages().All(page => page.Secret == null && page.Account == null)
+                && !Json.Write(managedResult.ToCache()).Contains(managedToken) && !Json.Write(managedResult.ToCache()).Contains(managedToken2)
+                && managedResult.Attempts.All(attempt => !attempt.Detail.Contains(managedToken) && !attempt.Detail.Contains(managedToken2)));
+            var managedCached = ProviderResult.FromCache(managedResult.ToCache());
+            Check("managed: balances and alternates survive cache", managedCached.Billing == "payg" && managedCached.Pages().Count == 2
+                && managedCached.Headline == "\u00a56.75 / $2.50" && managedCached.Info.Count == 6 && managedCached.Secret == null);
+            Check("managed: registered alongside API-key DeepSeek", Provider.Build(new Config()).Any(provider => provider.Id == "dsh_managed")
+                && Provider.Build(new Config()).Any(provider => provider.Id == "deepseek"));
+            var localManagedConfig = new Config(J("{\"providers\":{\"dsh_managed\":{\"scan_wsl\":false}}}"));
+            managedRequests.Clear();
+            new DshManagedProvider(localManagedConfig).Fetch();
+            Check("managed: scan_wsl false skips other homes", managedRequests.Count == 1);
+
+            var managedEnvDir = Path.Combine(Paths.AppDir, "managed-env");
+            var managedManualDir = Path.Combine(Paths.AppDir, "managed-manual");
+            Directory.CreateDirectory(managedEnvDir);
+            Directory.CreateDirectory(managedManualDir);
+            File.WriteAllText(Path.Combine(managedEnvDir, ".credentials.yaml"), ManagedGrant("synthetic-env-grant"));
+            File.WriteAllText(Path.Combine(managedManualDir, ".credentials.yaml"), ManagedGrant("synthetic-manual-grant"));
+            DeepSeekProvider.Env = name => name == "DSH_HOME" ? managedEnvDir : null;
+            managedRequests.Clear();
+            new DshManagedProvider(localManagedConfig).Fetch();
+            Check("managed: DSH_HOME overrides default local folder", managedRequests.Count == 1 && managedRequests[0].Headers["x-dsh-auth-token"] == "synthetic-env-grant");
+            managedRequests.Clear();
+            new DshManagedProvider(new Config(J("{\"providers\":{\"dsh_managed\":{\"scan_wsl\":false,\"home\":" + Json.Write(managedManualDir) + "}}}"))).Fetch();
+            Check("managed: configured home wins over DSH_HOME", managedRequests.Count == 1 && managedRequests[0].Headers["x-dsh-auth-token"] == "synthetic-manual-grant");
+            DeepSeekProvider.Env = name => null;
+            var localManaged = new DshManagedProvider(localManagedConfig);
+            var managedErrors = new[]
+            {
+                Tuple.Create(401, managedToken, "sign in again"),
+                Tuple.Create(403, managedToken, "HTTP 403"),
+                Tuple.Create(200, "{\"code\":40003,\"msg\":" + Json.Write(managedToken) + "}", "sign in again"),
+                Tuple.Create(200, "{\"code\":0,\"data\":{\"biz_code\":40003}}", "business code 40003"),
+                Tuple.Create(200, "{\"code\":7,\"msg\":" + Json.Write(managedToken) + "}", "code 7"),
+                Tuple.Create(200, "{\"code\":0,\"data\":{\"biz_code\":8}}", "code 8"),
+                Tuple.Create(302, managedToken, "HTTP 302"),
+                Tuple.Create(503, managedToken, "HTTP 503"),
+                Tuple.Create(200, managedToken, "non-JSON"),
+                Tuple.Create(200, "{\"code\":0,\"data\":{\"biz_code\":0,\"biz_data\":{}}}", "no valid wallets"),
+            };
+            foreach (var failure in managedErrors)
+            {
+                Http.Send = request => new HttpReply(failure.Item1, failure.Item2);
+                var failedManaged = localManaged.Fetch();
+                Check("managed: safe failure " + failure.Item1 + "/" + failure.Item3, !failedManaged.Ok && failedManaged.Installed
+                    && failedManaged.Status.Contains(failure.Item3) && !failedManaged.Status.Contains(managedToken)
+                    && failedManaged.Attempts.All(attempt => !attempt.Detail.Contains(managedToken))
+                    && File.ReadAllText(managedPath) == managedYaml, failedManaged.Status);
+            }
+            Http.Send = request => throw new IOException(managedToken);
+            var managedException = localManaged.Fetch();
+            Check("managed: exception text cannot reach diagnostics", !managedException.Ok && !managedException.Status.Contains(managedToken)
+                && managedException.Attempts.All(attempt => !attempt.Detail.Contains(managedToken)));
+            File.WriteAllText(managedPath, ManagedGrant(managedToken2));
+            managedRequests.Clear();
+            Http.Send = request => { managedRequests.Add(request); return new HttpReply(200, ManagedWallets("[{\"currency\":\"CNY\",\"balance\":\"0\"}]", "[]")); };
+            var managedZeroResult = localManaged.Fetch();
+            Check("managed: refreshed grant reread and zero remains connected", managedZeroResult.Ok && managedZeroResult.Status == "connected"
+                && managedZeroResult.Headline == "\u00a50.00" && managedRequests.Single().Headers["x-dsh-auth-token"] == managedToken2);
+            File.WriteAllText(managedPath, ManagedGrant(managedToken, "https://other.test"));
+            managedRequests.Clear();
+            var wrongIssuer = localManaged.Fetch();
+            Check("managed: foreign issuer detected but never requested", wrongIssuer.Installed && !wrongIssuer.Ok && managedRequests.Count == 0);
+            File.Delete(managedPath);
+            var missingManaged = localManaged.Fetch();
+            Check("managed: missing credentials are not installed", !missingManaged.Installed && !missingManaged.Ok);
+            DeepSeekProvider.HomesOverride = st => new List<KeyValuePair<string, string>> { new KeyValuePair<string, string>(dsHome, "") };
+
             Console.WriteLine("--- accounts, reminders, updates ---");
             var a1 = new ProviderResult("x", "X") { Account = "A@x.com", Label = "one" };
             var a2 = new ProviderResult("x", "X") { Account = "a@x.com", Label = "two" };

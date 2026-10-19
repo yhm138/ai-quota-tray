@@ -36,7 +36,8 @@
 
 ## Features
 
-- View Claude, Codex, Antigravity, TRAE and Doubao usage, plus DeepSeek API balances, in one panel.
+- View Claude, Codex, Antigravity, TRAE and Doubao usage, plus DeepSeek API and Harness-managed account balances, in one panel.
+- The [“由 Harness 管理” (Managed by Harness)](docs/providers.en.md#managed-by-harness-pay-as-you-go) card reuses your DSH login and shows topped-up and granted balances with totals per currency. Your own API keys appear on the separate [OpenCode-DeepSeek-Official](docs/providers.en.md#opencode-deepseek-official-pay-as-you-go) card.
 - Track quota windows, reset countdowns, plans, credits and multiple accounts, with reminders for unused one-time resets.
 - Reuse credentials from tools already signed in on your machine; no separate QuotaTray sign-in.
 - Start with Windows, refresh from the tray menu and update in one click. The Gemini CLI card is off by default.

@@ -19,7 +19,7 @@ namespace QuotaTray.Providers
     public sealed class DeepSeekProvider : Provider
     {
         public override string Id => "deepseek";
-        public override string Name => "DeepSeek";
+        public override string Name => "OpenCode-DeepSeek-Official";
         public override string Billing => "payg";
 
         public const string BalanceUrl = "https://api.deepseek.com/user/balance";
@@ -162,7 +162,7 @@ namespace QuotaTray.Providers
 
         // ------------------------------------------------------------ discovery
 
-        private static List<KeyValuePair<string, string>> Homes(JObj settings)
+        internal static List<KeyValuePair<string, string>> Homes(JObj settings)
         {
             if (HomesOverride != null) return HomesOverride(settings);
             var homes = new List<KeyValuePair<string, string>> { new KeyValuePair<string, string>(Paths.Home, "") };

@@ -110,6 +110,12 @@ DEFAULTS: dict[str, Any] = {
             "scan_wsl": True,
             "low_balance": 5,            # amber below this much (in the account's currency)
         },
+        "dsh_managed": {
+            "enabled": True,
+            "home": "",                  # override DSH_HOME / ~/.dsh
+            "scan_wsl": True,
+            "low_balance": 5,
+        },
     },
 }
 

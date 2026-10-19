@@ -144,6 +144,12 @@ failed one has an *Open log* button.
       "scan_dsh": true,
       "scan_wsl": true,
       "low_balance": 5             // amber below this (in the account's currency)
+    },
+    "dsh_managed": {
+      "enabled": true,
+      "home": "",                  // empty: use DSH_HOME or ~/.dsh; otherwise use this directory
+      "scan_wsl": true,
+      "low_balance": 5             // amber below this, separately for each currency
     }
   }
 }
@@ -152,6 +158,15 @@ failed one has an *Open log* button.
 Set `enabled` to `false` to skip a product. Edit `order` to change the fallback
 sequence or drop a path entirely — for example remove `app_server` if you would
 rather not spawn a process on every refresh.
+
+`deepseek` configures the [OpenCode-DeepSeek-Official](providers.en.md#opencode-deepseek-official-pay-as-you-go)
+card for your own API keys, including keys saved by OpenCode or Harness and
+keys supplied through the configuration or environment.
+
+`dsh_managed` configures the separate **“由 Harness 管理” (Managed by Harness)**
+balance card. Its `home` setting selects the DSH directory, and `scan_wsl`
+controls discovery of WSL logins. See [Managed by Harness](providers.en.md#managed-by-harness-pay-as-you-go)
+for the saved login record and balance endpoint.
 
 ## Troubleshooting
 
@@ -181,6 +196,7 @@ and *Open as text* opens the whole report in Notepad.
 | Codex "offline snapshot" | It fell through to the session-log path. Run `codex` once |
 | Codex "partly from an offline snapshot" | The live endpoint reported only one window; the other came from the log. Normal |
 | Antigravity "IDE not running" | Open the IDE, then *Refresh now* in the tray menu |
+| “由 Harness 管理” reports an expired login | Sign in again in Harness, then *Refresh now*; no token needs to be pasted |
 | Claude Code can't reach your proxy | Edit `PROXY_PORT` at the top of `claude_login.bat`, run it, then `/login` |
 | No tray icon | Start `QuotaTray.exe` by hand: it opens its panel. Windows 11 hides new tray icons under the `^` arrow; drag it out. If it cannot start you get a message and `%APPDATA%\QuotaTray\crash.log` |
 | `Could not find a suitable TLS CA certificate bundle ... _MEI...` | Windows temp cleanup deleted files the one-file exe unpacked. Fixed in v1.2.2 (it keeps its own copy and restarts itself); the portable zip never unpacks to temp at all |
@@ -192,9 +208,9 @@ Log: `%APPDATA%\QuotaTray\quota-tray.log` · Snapshot: `%APPDATA%\QuotaTray\diag
 
 ## Privacy
 
-- Credentials are used only in HTTP `Authorization` / `Cookie` headers, never logged and never sent anywhere else. Tokens are only read, never refreshed, so your Claude Code / Claude Desktop logins stay untouched.
+- Credentials are used only in HTTP `Authorization` / `Cookie` / `x-dsh-auth-token` headers, never logged and never sent anywhere else. Tokens are only read, never refreshed, so your Claude Code / Claude Desktop logins stay untouched.
 - One thing is written to disk: the last working Claude Desktop session cookie, DPAPI-encrypted to your Windows account, in `%APPDATA%\QuotaTray\claude-session.bin` (used when Claude Desktop keeps its cookie file locked). Delete it any time.
-- Hosts contacted: `api.anthropic.com`, `claude.ai`, `chatgpt.com`, `api.deepseek.com`, `cloudcode-pa.googleapis.com`, `api.trae.cn`, `www.doubao.com` and `127.0.0.1` for quotas; `api.github.com`, `github.com` and `raw.githubusercontent.com` for the daily update check (turn off with `check_updates`).
+- Hosts contacted: `api.anthropic.com`, `claude.ai`, `chatgpt.com`, `api.deepseek.com`, `platform.deepseek.com`, `cloudcode-pa.googleapis.com`, `api.trae.cn`, `www.doubao.com` and `127.0.0.1` for quotas; `api.github.com`, `github.com` and `raw.githubusercontent.com` for the daily update check (turn off with `check_updates`).
 - Every quota call lives in the files under `python/quota_tray/providers/` (C#: `csharp/src/QuotaTray/Providers/`), the update check in `python/quota_tray/updater.py`, so the whole surface is short enough to read.
 - `probe.bat` redacts tokens and cookies before writing its report, but `_probe.txt` still contains local paths — do not paste it publicly without a look.
 

@@ -386,7 +386,7 @@ def balance_rows(payload: dict, low: float) -> tuple[list[InfoRow], str | None, 
 
 class DeepSeekProvider(Provider):
     id = "deepseek"
-    name = "DeepSeek"
+    name = "OpenCode-DeepSeek-Official"
     billing = "payg"
 
     def detect(self) -> bool:

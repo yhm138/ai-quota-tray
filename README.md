@@ -36,7 +36,8 @@
 
 ## 功能概览
 
-- 在一个面板中查看 Claude、Codex、Antigravity、TRAE、豆包的用量，以及 DeepSeek API 余额。
+- 在一个面板中查看 Claude、Codex、Antigravity、TRAE、豆包的用量，以及 DeepSeek API 和 Harness 托管账户的余额。
+- 按量计费页的 [“由 Harness 管理”](docs/providers.md#由-harness-管理按量计费) 卡片复用 DSH 登录，分别显示充值、赠送余额及同币种合计；自备 API key 余额显示在独立的 [OpenCode-DeepSeek-Official](docs/providers.md#opencode-deepseek-official按量计费) 卡片。
 - 显示额度窗口、重置倒计时、套餐、积分和多账号；提醒尚未使用的一次性额度重置。
 - 读取本机工具已有的登录凭据，无需在 QuotaTray 内重新登录。
 - 支持 Windows 开机自启、托盘菜单刷新和一键更新。Gemini CLI 卡片默认关闭。

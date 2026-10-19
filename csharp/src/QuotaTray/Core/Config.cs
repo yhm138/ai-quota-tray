@@ -115,6 +115,12 @@ namespace QuotaTray.Core
       ""data_dir"": """",
       ""scan_browsers"": false
     },
+    ""dsh_managed"": {
+      ""enabled"": true,
+      ""home"": """",
+      ""scan_wsl"": true,
+      ""low_balance"": 5
+    },
     ""deepseek"": {
       ""enabled"": true,
       ""api_key"": """",
