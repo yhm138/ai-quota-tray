@@ -1699,6 +1699,148 @@ nr = deepseek.DeepSeekProvider(Config()).fetch()
 check("deepseek: no key, not installed", not nr.ok and not nr.installed)
 deepseek.discover_keys = real_discover
 
+# ------------------------------------------------------------------ Harness managed account
+
+print("\n--- Harness managed account ---")
+from contextlib import nullcontext
+from decimal import Decimal
+from quota_tray.providers import dsh_managed
+from quota_tray.providers.base import build_providers
+
+_grant_token = "synthetic-harness-grant-not-a-real-token"
+_grant = {"version": 1, "records": {
+    "deepseek-account-platform/default": {"kind": "grant", "payload": {
+        "version": 1, "token": _grant_token, "issuer": dsh_managed.ORIGIN}},
+    "unrelated/default": {"kind": "grant", "payload": {"token": "not-the-account"}},
+}}
+_grant_yaml = ("version: 1\nrecords:\n  unrelated/default:\n    kind: grant\n"
+               "    payload:\n      token: not-the-account\n"
+               "  deepseek-account-platform/default:\n    kind: grant\n    payload:\n"
+               f"      version: 1\n      token: '{_grant_token}'\n"
+               "      issuer: https://platform.deepseek.com\n")
+check("Harness: reads the dedicated grant in emitted YAML", dsh_managed.credential_token(_grant_yaml) == _grant_token)
+check("Harness: JSON document and UTF-8 BOM", dsh_managed.credential_token('\ufeff' + json.dumps(_grant)) == _grant_token)
+check("Harness: quoted keys and scalar comments", dsh_managed.credential_token(_grant_yaml.replace(
+    'deepseek-account-platform/default:', '"deepseek-account-platform/default":').replace(
+    "      version: 1", "      version: 1 # payload version")) == _grant_token)
+check("Harness: duplicate token fields rejected", dsh_managed.credential_token(
+    _grant_yaml + "      token: duplicate\n") is None)
+check("Harness: duplicate JSON fields rejected", dsh_managed.credential_token(
+    json.dumps(_grant).replace('"kind": "grant"', '"kind": "bad", "kind": "grant"')) is None)
+check("Harness: API key does not imply managed login", dsh_managed.credential_token(
+    "version: 1\nrefs:\n  DEEPSEEK_API_KEY: fake-key\n") is None)
+for _field, _value in (("issuer", "https://other.example"), ("issuer", dsh_managed.ORIGIN + ".evil.example"),
+                       ("version", 2), ("version", True), ("token", "line\nbreak"), ("token", "")):
+    _bad = json.loads(json.dumps(_grant))
+    _bad["records"][dsh_managed.RECORD]["payload"][_field] = _value
+    check(f"Harness: rejects invalid grant {_field} {str(_value)!r}", dsh_managed.credential_token(json.dumps(_bad)) is None)
+
+_wallets = {"normal_wallets": [{"currency": "CNY", "balance": "12.345"}],
+            "bonus_wallets": [{"currency": "CNY", "balance": "2.5"}]}
+_hr, _hh = dsh_managed.wallet_rows(_wallets, Decimal(5))
+check("Harness: total and separate topped up / granted", _hh == "\u00a514.84"
+      and [row.value for row in _hr] == ["\u00a514.84", "\u00a512.34", "\u00a52.50 (can expire)"])
+_hr, _hh = dsh_managed.wallet_rows({"normal_wallets": [
+    {"currency": "USD", "balance": "2e1"}, {"currency": "CNY", "balance": "5."},
+    {"currency": "CNY", "balance": ".50"}], "bonus_wallets": [
+    {"currency": "CNY", "balance": "0E-16"}]}, Decimal(5))
+check("Harness: multiple currencies never combined", _hh == "\u00a55.50 / $20.00" and len(_hr) == 6)
+_hr, _hh = dsh_managed.wallet_rows({"normal_wallets": [], "bonus_wallets": [
+    {"currency": "CNY", "balance": "0E-16"}]}, Decimal(5))
+check("Harness: zero is a real low balance", _hh == "\u00a50.00" and _hr[0].tone == "warn")
+for _amount in (True, 0, "NaN", "Infinity", "garbage", "1e1000", "1e-1000", "1e1000000"):
+    check(f"Harness: malformed wallet {_amount!r} is not zero", dsh_managed.wallet_rows({
+        "normal_wallets": [{"currency": "CNY", "balance": _amount}], "bonus_wallets": []}, Decimal(5)) == ([], None))
+check("Harness: missing or empty wallets fail", dsh_managed.wallet_rows({}, Decimal(5)) == ([], None)
+      and dsh_managed.wallet_rows({"normal_wallets": [], "bonus_wallets": []}, Decimal(5)) == ([], None))
+for _amount, _expected in (("0.001", "<\u00a50.01"), ("-0.001", "-\u00a50.01"),
+                           ("-1.125", "-\u00a51.13"), ("1000", "\u00a51,000.00"),
+                           ("79228162514264337593543950335", "\u00a579,228,162,514,264,337,593,543,950,335.00")):
+    check(f"Harness: accurate wallet display {_amount}", dsh_managed.wallet_rows({
+        "normal_wallets": [{"currency": "CNY", "balance": _amount}], "bonus_wallets": []}, Decimal(5))[1] == _expected)
+
+_hhome = Path(tempfile.mkdtemp())
+(_hhome / '.dsh').mkdir()
+_hpath = _hhome / '.dsh/.credentials.yaml'
+_hpath.write_text(_grant_yaml, encoding='utf-8')
+_real_hhomes, _real_hsession = dsh_managed._homes, dsh_managed.session
+dsh_managed._homes = lambda settings: [(_hhome, '')]
+try:
+    check("Harness: discovers default login", dsh_managed.credential_files({}, {}) == [(_hpath, 'DeepSeek Harness')])
+    check("Harness: DSH_HOME discovery", dsh_managed.credential_files({}, {'DSH_HOME': str(_hhome / '.dsh')})[0][0] == _hpath)
+    check("Harness: home setting overrides environment", dsh_managed.credential_files(
+        {'home': str(_hhome / '.dsh')}, {'DSH_HOME': str(_hhome / 'absent')})[0][0] == _hpath)
+    _wslhome = _hhome / 'wsl-home'
+    (_wslhome / '.dsh').mkdir(parents=True)
+    (_wslhome / '.dsh/.credentials.yaml').write_text(_grant_yaml, encoding='utf-8')
+    dsh_managed._homes = lambda settings: [(_hhome, ''), (_wslhome, 'Ubuntu')]
+    check("Harness: local home override does not redirect WSL", dsh_managed.credential_files(
+        {'home': str(_hhome / '.dsh')}, {}) == [(_hpath, 'DeepSeek Harness'),
+        (_wslhome / '.dsh/.credentials.yaml', 'DeepSeek Harness - WSL Ubuntu')])
+    check("Harness: WSL scan can be disabled", len(dsh_managed.credential_files(
+        {'home': str(_hhome / '.dsh'), 'scan_wsl': False}, {})) == 1)
+    _hsettings = {'home': str(_hhome / '.dsh'), 'scan_wsl': True}
+    _hp = dsh_managed.DshManagedProvider(Config({'providers': {'dsh_managed': _hsettings}}))
+    _seen_hrequests = []
+    _henvelope = {'code': 0, 'data': {'biz_code': 0, 'biz_data': _wallets}}
+    def _hget(url, **kwargs):
+        _seen_hrequests.append((url, kwargs))
+        return FakeResp(_henvelope)
+    dsh_managed.session = lambda: nullcontext(fake_session(get=_hget))
+    _hresult = _hp.fetch()
+    check("Harness: independent named payg card", _hresult.ok and _hresult.installed
+          and _hresult.name == '\u7531 Harness \u7ba1\u7406' and _hresult.billing == 'payg'
+          and _hresult.provider_id == 'dsh_managed' and not _hresult.windows)
+    check("Harness: fixed destination, account header, redirects disabled", len(_seen_hrequests) == 1
+          and _seen_hrequests[0][0] == dsh_managed.BALANCE_URL
+          and _seen_hrequests[0][1]['headers']['x-dsh-auth-token'] == _grant_token
+          and _seen_hrequests[0][1]['allow_redirects'] is False
+          and 'Authorization' not in _seen_hrequests[0][1]['headers'])
+    check("Harness: token absent from result, cache and diagnostic attempts", _hresult.secret is None
+          and _grant_token not in repr(_hresult) and _grant_token not in json.dumps(_hresult.to_cache()))
+    _hc = ProviderResult.from_cache(_hresult.to_cache())
+    check("Harness: balance survives cache", _hc.billing == 'payg' and _hc.headline == '\u00a514.84' and _hc.secret is None)
+    check("Harness: duplicate Windows/WSL grant makes one request and page", len(_seen_hrequests) == 1
+          and not _hresult.alternates and 'WSL Ubuntu' in _hresult.label)
+    (_wslhome / '.dsh/.credentials.yaml').write_text(_grant_yaml.replace(_grant_token, 'fake-other-harness-grant'), encoding='utf-8')
+    dsh_managed.session = lambda: nullcontext(fake_session(get=lambda url, **kw: FakeResp(
+        _henvelope if kw['headers']['x-dsh-auth-token'] == _grant_token else {'code': 40003})))
+    _hresult = _hp.fetch()
+    check("Harness: separate accounts share a card with failed login still visible", _hresult.ok
+          and len(_hresult.alternates) == 1 and not _hresult.alternates[0].ok
+          and 'sign in' in _hresult.alternates[0].status)
+    dsh_managed._homes = lambda settings: [(_hhome, '')]
+    check("Harness: separate provider registration", {'deepseek', 'dsh_managed'} <= {p.id for p in build_providers(Config())})
+    check("Harness: can be disabled independently", 'dsh_managed' not in {p.id for p in build_providers(
+        Config({'providers': {'dsh_managed': {'enabled': False}}}))})
+    for _response, _status, _expected in (({}, 401, 'sign in'), ({}, 403, 'HTTP 403'),
+        ({'code': 40003}, 200, 'sign in'), ({}, 429, 'HTTP 429'), ({}, 302, 'HTTP 302'),
+        ({'code': 7, 'msg': _grant_token}, 200, 'code 7'),
+        ({'code': 0, 'data': {'biz_code': 8, 'biz_msg': _grant_token}}, 200, 'code 8'),
+        ({'code': False}, 200, 'invalid'), ({'code': 0, 'data': {'biz_code': False}}, 200, 'invalid'),
+        ({'code': 0, 'data': {'biz_code': 0, 'biz_data': {}}}, 200, 'no valid wallets')):
+        dsh_managed.session = lambda: nullcontext(fake_session(get=lambda *a, **k: FakeResp(_response, _status)))
+        _failed = _hp.fetch()
+        check(f"Harness: safe failure {_status} {_expected}", not _failed.ok and _failed.installed
+              and _expected in _failed.status and not _failed.info and _failed.headline is None
+              and _grant_token not in repr(_failed))
+    def _hraise(*args, **kwargs):
+        raise RuntimeError(_grant_token)
+    dsh_managed.session = lambda: nullcontext(fake_session(get=_hraise))
+    _failed = _hp.fetch()
+    check("Harness: transport exception cannot leak token", not _failed.ok and _grant_token not in repr(_failed))
+    _hpath.write_text(_grant_yaml.replace(dsh_managed.ORIGIN, 'https://relay.example'), encoding='utf-8')
+    _seen_hrequests.clear()
+    dsh_managed.session = lambda: nullcontext(fake_session(get=_hget))
+    _failed = _hp.fetch()
+    check("Harness: wrong issuer makes no network request", not _failed.ok and _failed.installed and not _seen_hrequests)
+    check("Harness: rejected login never modified", 'https://relay.example' in _hpath.read_text(encoding='utf-8'))
+    _hpath.unlink()
+    _missing = _hp.fetch()
+    check("Harness: missing login is not installed", not _missing.ok and not _missing.installed)
+finally:
+    dsh_managed._homes, dsh_managed.session = _real_hhomes, _real_hsession
+
 # ------------------------------------------------------------------ shared reads
 
 print("\n--- shared credential reads ---")

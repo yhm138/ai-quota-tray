@@ -11,6 +11,7 @@ Credential discovery, quota endpoints and fallback paths for each product. See t
 - [TRAE (Trae CN)](#trae-trae-cn)
 - [Doubao](#doubao)
 - [DeepSeek (pay as you go)](#deepseek-pay-as-you-go)
+- [Managed by Harness (pay as you go)](#managed-by-harness-pay-as-you-go)
 
 ## Claude
 
@@ -142,3 +143,25 @@ the CLI inside a distro has that distro's own `auth.json`, and so do the WSL
 servers Desktop starts (*OpenCode Desktop - WSL Ubuntu*). Diagnostics lists
 where each app was found. A key is only ever sent to `api.deepseek.com`, and a key that a
 tool points at a relay (its own base URL) is left alone.
+
+## Managed by Harness (pay as you go)
+
+Both Python and C# editions show a separate **“由 Harness 管理” (Managed by Harness)**
+card on the *Pay as you go* tab for the DeepSeek Harness (DSH) managed account.
+It displays topped-up and granted balances separately, with totals per currency;
+different currencies are never added together. The DeepSeek card for your own
+API keys remains separate.
+
+QuotaTray reads the `records.deepseek-account-platform/default` login record
+from DSH's `.credentials.yaml` and queries the fixed official endpoint
+`https://platform.deepseek.com/api/v0/users/get_user_summary`.
+The request format and balance fields follow
+[DSH's official details.ts source at a pinned revision](https://github.com/deepseek-ai/deepseek-harness/blob/687f282e8625c6b8d11ff58211a90524be2e4317/packages/credentials/deepseek-account-platform/src/details.ts).
+It uses `DSH_HOME`, falling back to `~/.dsh`, and also searches DSH logins in WSL.
+Set `providers.dsh_managed.home` to use another DSH directory, or set `scan_wsl`
+to `false` to disable WSL discovery. See [configuration](user-guide.en.md#configuration)
+for all settings.
+
+Sign in through Harness first. If the login expires, sign in again in Harness
+and refresh QuotaTray. No API key or login token needs to be copied. Login
+tokens are used only for the request and are never displayed, cached or logged.

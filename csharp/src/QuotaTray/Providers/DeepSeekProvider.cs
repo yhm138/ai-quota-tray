@@ -162,7 +162,7 @@ namespace QuotaTray.Providers
 
         // ------------------------------------------------------------ discovery
 
-        private static List<KeyValuePair<string, string>> Homes(JObj settings)
+        internal static List<KeyValuePair<string, string>> Homes(JObj settings)
         {
             if (HomesOverride != null) return HomesOverride(settings);
             var homes = new List<KeyValuePair<string, string>> { new KeyValuePair<string, string>(Paths.Home, "") };

@@ -351,8 +351,8 @@ class Panel:
             tk.Label(inner, text="Loading...", bg=theme.BG, fg=theme.FG_DIM,
                      font=self.f_body).pack(anchor="w", pady=20)
         elif not results:
-            text = ("No pay-as-you-go API keys found.\nQuotaTray reads the DeepSeek key that "
-                    "OpenCode or DeepSeek Harness (dsh) keeps, or DEEPSEEK_API_KEY."
+            text = ("No pay-as-you-go accounts found.\nSign in to DeepSeek Harness, or add a "
+                    "DeepSeek API key in OpenCode, Harness or DEEPSEEK_API_KEY."
                     if self.tab == "payg" else "No subscriptions found on this machine.")
             tk.Label(inner, text=text, bg=theme.BG, fg=theme.FG_DIM, font=self.f_body,
                      justify="left", wraplength=WIDTH - 2 * PAD).pack(anchor="w", pady=20)

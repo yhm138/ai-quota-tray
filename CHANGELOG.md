@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- **A separate Harness-managed balance card in both editions.** The Pay as
+  you go tab adds **由 Harness 管理**, using DeepSeek Harness's saved login
+  to query the official account summary endpoint. Topped-up and granted
+  balances appear separately, with totals per currency. The existing
+  DeepSeek API-key card remains separate. An expired login is renewed in
+  Harness; login tokens are never displayed, cached or logged.
+
 ## v1.8.5
 
 - **Codex card shows when the subscription started.** The Subscription row

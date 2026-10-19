@@ -486,7 +486,7 @@ namespace QuotaTray.UI
             if (_results.Count == 0 || results.Count == 0)
             {
                 var text = _results.Count == 0 ? "Loading..."
-                    : _tab == "payg" ? "No pay-as-you-go API keys found.\nQuotaTray reads the DeepSeek key that OpenCode or DeepSeek Harness (dsh) keeps, or DEEPSEEK_API_KEY."
+                    : _tab == "payg" ? "No pay-as-you-go accounts found.\nQuotaTray reads DeepSeek API keys from OpenCode or Harness, and managed logins from DeepSeek Harness."
                     : "No subscriptions found on this machine.";
                 var size = MeasureWrapped(g, text, _fBody, width - 2 * pad);
                 DrawWrapped(g, draw, text, _fBody, Theme.FgDim, new Rectangle(pad, y + S(20), width - 2 * pad, size.Height + 2));

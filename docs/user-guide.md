@@ -87,6 +87,22 @@ exe、便携版、源码安装都适用，`%APPDATA%\QuotaTray` 里的设置会�
 - `promote_tray_icon` — Windows 11 下把托盘图标固定显示在任务栏上，而不是藏在 ^ 里（你自己在设置里改过的不会被覆盖）
 - `remind_unused_resets` / `reset_reminder_hour` — 未使用重置的每日提醒及其时间
 - `providers.deepseek.low_balance` — DeepSeek 余额低于这个数（按账户币种）时变黄，默认 5；`api_key` 可以手填 Key
+- `providers.dsh_managed` — “由 Harness 管理”独立余额卡片，默认配置如下。`home` 留空时使用 `DSH_HOME` 或 `~/.dsh`；非空时指定 DSH 目录。`scan_wsl` 控制 WSL 登录搜索，`low_balance` 是各币种的低余额提醒阈值。
+
+```json
+{
+  "providers": {
+    "dsh_managed": {
+      "enabled": true,
+      "home": "",
+      "scan_wsl": true,
+      "low_balance": 5
+    }
+  }
+}
+```
+
+将需要的字段合并到现有配置即可；登录记录和查询接口见 [由 Harness 管理](providers.md#由-harness-管理按量计费)。
 
 ## 排错
 
@@ -112,6 +128,7 @@ exe、便携版、源码安装都适用，`%APPDATA%\QuotaTray` 里的设置会�
 | Codex 显示 "offline snapshot" | 走的是会话日志兜底；跑一次 `codex` 会刷新 |
 | Codex 显示 "partly from an offline snapshot" | 线上接口只返回了一个窗口，另一个来自日志。正常现象 |
 | Antigravity 显示 "IDE not running" | 打开 IDE，然后在托盘菜单点 *Refresh now* |
+| “由 Harness 管理”提示登录失效 | 在 Harness 中重新登录，再点 *Refresh now*；无需手填令牌 |
 | Claude Code 连不上你的代理端口 | 改 `claude_login.bat` 开头的 `PROXY_PORT`，运行它，再 `/login` |
 | 托盘没图标 | 手动运行 `QuotaTray.exe`，会直接弹出面板。Windows 11 默认把新图标藏在 `^` 里，拖出来即可。启动失败会弹窗并写 `%APPDATA%\QuotaTray\crash.log` |
 | `Could not find a suitable TLS CA certificate bundle ... _MEI...` | Windows 清理临时文件时删掉了单文件 exe 解压出的文件。v1.2.2 已修复（自带证书副本并自动重启）；便携版 zip 不解压到临时目录，不受影响 |
@@ -122,9 +139,9 @@ exe、便携版、源码安装都适用，`%APPDATA%\QuotaTray` 里的设置会�
 
 ## 隐私
 
-- 凭据只用在 HTTP 的 `Authorization` / `Cookie` 头里，不写日志、不发给任何第三方。只读取 token，从不刷新，不会影响你的 Claude Code / Claude Desktop 登录
+- 凭据只用在 HTTP 的 `Authorization` / `Cookie` / `x-dsh-auth-token` 头里，不写日志、不发给任何第三方。只读取 token，从不刷新，不会影响你的 Claude Code / Claude Desktop 登录
 - 唯一落盘的是最近一次可用的 Claude Desktop 会话 cookie，用 DPAPI 绑定你的 Windows 账户加密，存在 `%APPDATA%\QuotaTray\claude-session.bin`（Claude Desktop 锁住 cookie 文件时使用），可随时删除
-- 额度查询只连 `api.anthropic.com`、`claude.ai`、`chatgpt.com`、`api.deepseek.com`、`cloudcode-pa.googleapis.com`、`api.trae.cn`、`www.doubao.com`、`127.0.0.1`；每日检查更新连 `api.github.com`、`github.com`、`raw.githubusercontent.com`（可用 `check_updates` 关闭）
+- 额度查询只连 `api.anthropic.com`、`claude.ai`、`chatgpt.com`、`api.deepseek.com`、`platform.deepseek.com`、`cloudcode-pa.googleapis.com`、`api.trae.cn`、`www.doubao.com`、`127.0.0.1`；每日检查更新连 `api.github.com`、`github.com`、`raw.githubusercontent.com`（可用 `check_updates` 关闭）
 - 额度请求都在 `python/quota_tray/providers/`（C# 版在 `csharp/src/QuotaTray/Providers/`）里，更新检查在 `python/quota_tray/updater.py`，整个面很小，可以自己读完
 - `probe.bat` 生成报告时会脱敏 token 和 cookie，但 `_probe.txt` 里仍有本机路径，公开粘贴前先看一眼
 
