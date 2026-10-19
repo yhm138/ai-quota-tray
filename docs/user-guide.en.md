@@ -159,6 +159,10 @@ Set `enabled` to `false` to skip a product. Edit `order` to change the fallback
 sequence or drop a path entirely — for example remove `app_server` if you would
 rather not spawn a process on every refresh.
 
+`deepseek` configures the [OpenCode-DeepSeek-Official](providers.en.md#opencode-deepseek-official-pay-as-you-go)
+card for your own API keys, including keys saved by OpenCode or Harness and
+keys supplied through the configuration or environment.
+
 `dsh_managed` configures the separate **“由 Harness 管理” (Managed by Harness)**
 balance card. Its `home` setting selects the DSH directory, and `scan_wsl`
 controls discovery of WSL logins. See [Managed by Harness](providers.en.md#managed-by-harness-pay-as-you-go)

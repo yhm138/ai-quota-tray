@@ -10,7 +10,7 @@ Credential discovery, quota endpoints and fallback paths for each product. See t
 - [Gemini CLI](#gemini-cli)
 - [TRAE (Trae CN)](#trae-trae-cn)
 - [Doubao](#doubao)
-- [DeepSeek (pay as you go)](#deepseek-pay-as-you-go)
+- [OpenCode-DeepSeek-Official (pay as you go)](#opencode-deepseek-official-pay-as-you-go)
 - [Managed by Harness (pay as you go)](#managed-by-harness-pay-as-you-go)
 
 ## Claude
@@ -116,11 +116,12 @@ keeps its account information and explains why usage is unavailable.
   Cookie string, so if a lone `sessionid` is rejected you can paste the entire
   Cookie header from a logged-in `www.doubao.com` request.
 
-## DeepSeek (pay as you go)
+## OpenCode-DeepSeek-Official (pay as you go)
 
-DeepSeek bills API keys against a prepaid balance, so this card sits on the
-*Pay as you go* tab and shows what is left, from `api.deepseek.com/user/balance`.
-The key is read from the tools that already hold it:
+The **OpenCode-DeepSeek-Official** card sits on the *Pay as you go* tab and
+shows the prepaid balance for DeepSeek's official API, queried through
+`api.deepseek.com/user/balance`. Its configuration key remains
+`providers.deepseek`, and it retains all existing API-key sources:
 
 | Order | Source |
 |---|---|
@@ -149,8 +150,8 @@ tool points at a relay (its own base URL) is left alone.
 Both Python and C# editions show a separate **“由 Harness 管理” (Managed by Harness)**
 card on the *Pay as you go* tab for the DeepSeek Harness (DSH) managed account.
 It displays topped-up and granted balances separately, with totals per currency;
-different currencies are never added together. The DeepSeek card for your own
-API keys remains separate.
+different currencies are never added together. The **OpenCode-DeepSeek-Official**
+card for your own API keys remains separate.
 
 QuotaTray reads the `records.deepseek-account-platform/default` login record
 from DSH's `.credentials.yaml` and queries the fixed official endpoint

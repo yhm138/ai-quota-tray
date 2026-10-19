@@ -86,7 +86,7 @@ exe、便携版、源码安装都适用，`%APPDATA%\QuotaTray` 里的设置会�
 - `check_updates` — 每天检查新版本
 - `promote_tray_icon` — Windows 11 下把托盘图标固定显示在任务栏上，而不是藏在 ^ 里（你自己在设置里改过的不会被覆盖）
 - `remind_unused_resets` / `reset_reminder_hour` — 未使用重置的每日提醒及其时间
-- `providers.deepseek.low_balance` — DeepSeek 余额低于这个数（按账户币种）时变黄，默认 5；`api_key` 可以手填 Key
+- `providers.deepseek.low_balance` — [OpenCode-DeepSeek-Official](providers.md#opencode-deepseek-official按量计费) 卡片余额低于这个数（按账户币种）时变黄，默认 5；`api_key` 可以手填 Key
 - `providers.dsh_managed` — “由 Harness 管理”独立余额卡片，默认配置如下。`home` 留空时使用 `DSH_HOME` 或 `~/.dsh`；非空时指定 DSH 目录。`scan_wsl` 控制 WSL 登录搜索，`low_balance` 是各币种的低余额提醒阈值。
 
 ```json

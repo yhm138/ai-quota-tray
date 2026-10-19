@@ -19,7 +19,7 @@ namespace QuotaTray.Providers
     public sealed class DeepSeekProvider : Provider
     {
         public override string Id => "deepseek";
-        public override string Name => "DeepSeek";
+        public override string Name => "OpenCode-DeepSeek-Official";
         public override string Billing => "payg";
 
         public const string BalanceUrl = "https://api.deepseek.com/user/balance";
